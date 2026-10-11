@@ -4,6 +4,7 @@ Rules come in two groups. Early rules need only the language count and Wikidata 
 applies them before downloading anything else. Late rules need the dates and locations that are
 downloaded only for events that pass the early rules.
 """
+import bisect
 import csv
 import datetime
 import re
@@ -51,11 +52,14 @@ def load_details(ev):
     """Add labels, dates and locations, which exist only for events fetch.py downloaded them for."""
     downloaded = fetched_ids('labels.tsv') & fetched_ids('dates.tsv') & fetched_ids('locations.tsv')
     for q, e in ev.items():
-        e.update(downloaded=q in downloaded, label=e['enwiki'], description='',
+        e.update(downloaded=q in downloaded, label=e['enwiki'], description='', enwiki_bytes='',
                  dates=defaultdict(list), own=set(), borrowed=defaultdict(dict))
     for r in read('labels.tsv'):
         if r['item'] in ev:
             ev[r['item']].update(label=r['label'] or ev[r['item']]['enwiki'], description=r['description'])
+    for r in read('enwiki_lengths.tsv'):
+        if r['item'] in ev:
+            ev[r['item']]['enwiki_bytes'] = r['bytes']
     for r in read('dates.tsv'):
         if r['item'] in ev and DATE.match(r['time']):  # "unknown value" dates are blank nodes, not times
             ev[r['item']]['dates'][r['prop']].append((r['time'], int(r['precision'])))
@@ -112,26 +116,45 @@ def first_failed(rules):
     return next((reason for failed, reason in rules if failed), None)
 
 
+def language_cut(cats):
+    """The lowest MIN_LANGS among an event's categories, or None if none of them qualifies."""
+    cuts = [C.MIN_LANGS[c] for c in (cats or {'uncategorised'}) if C.MIN_LANGS[c] is not None]
+    return min(cuts, default=None)
+
+
+NOT_EVENTS = [dict(rule, types=re.compile(rule['types'], re.I) if 'types' in rule else None,
+                   title=re.compile(rule['title'], re.I) if 'title' in rule else None)
+              for rule in C.NOT_EVENTS]
+GENERIC_TYPES = re.compile(C.GENERIC_TYPES, re.I)
+
+
+def is_not_event(rule, q, e):
+    """Whether one NOT_EVENTS rule matches (see config.py for what each field means)."""
+    if e['categories'] & C.HISTORICAL and not rule.get('even_if_historical'):
+        return False
+    if 'items' in rule and q not in rule['items']:
+        return False
+    if 'category' in rule and rule['category'] not in e['categories']:
+        return False
+    if rule['title'] and not rule['title'].search(e['enwiki']):
+        return False
+    if rule['types']:
+        labels = e['type_labels']
+        if not any(rule['types'].search(l) for l in labels):
+            return False
+        if rule.get('every') and not all(rule['types'].search(l) or GENERIC_TYPES.match(l) for l in labels):
+            return False
+    return True
+
+
 def early_reason(q, e):
     """Why an event is dropped based on its languages and types alone, or None if it passes."""
-    cats, labels = e['categories'], e['type_labels']
-    protected = bool(cats & C.HISTORICAL)
-    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SPORT_EXCEPTION_EXCLUDES.search(e['enwiki'])
-    only_noise = (any(C.DROP_IF_ONLY_TYPES.search(l) for l in labels)
-                  and all(C.DROP_IF_ONLY_TYPES.search(l) or C.GENERIC_TYPES.match(l) for l in labels))
-    return first_failed([
-        (q in C.BLOCKLIST, 'blocklist'),
-        (e['langs'] < C.MIN_LANGS, f'fewer than {C.MIN_LANGS} languages'),
-        (any(C.DROP_ALWAYS_IF_ANY_TYPE.search(l) for l in labels), 'not real: myth, hypothetical, fan convention...'),
-        (not protected and not big_sport and any(C.DROP_IF_ANY_TYPE.search(l) for l in labels),
-         'type: draft, census, festival, pageant...'),
-        (not protected and not big_sport and 'sport' in cats,
-         f'sport under {C.SPORT_MIN_LANGS} languages, or a league season'),
-        (not protected and 'legislative term' in labels and C.NUMBERED_TERM_TITLE.match(e['enwiki']),
-         'numbered parliamentary term'),
-        (not protected and cats & (C.DROPPED_CATEGORIES - {'sport'}), 'entertainment or eclipse'),
-        (not protected and only_noise, 'not an event: award, trade fair, holiday, era...'),
-    ])
+    cut = language_cut(e['categories'])
+    if cut is None:
+        return 'only in dropped categories (entertainment, eclipse)'
+    if e['langs'] < cut:
+        return f'fewer than {cut} languages'
+    return next((rule['reason'] for rule in NOT_EVENTS if is_not_event(rule, q, e)), None)
 
 
 def late_reason(start, pts):
@@ -141,6 +164,24 @@ def late_reason(start, pts):
         (start and is_future(*start), 'in the future'),
         (not pts, 'no usable Earth coordinate'),
     ])
+
+
+def trim(kept):
+    """Drop low-language events whose article is short for their era and category (TRIM_* in config)."""
+    def group(r):
+        cats = r['categories'].split('|') if r['categories'] else []
+        primary = next((c for c in C.CATEGORIES if c in cats), 'uncategorised')
+        return primary, bisect.bisect_right(C.ERAS, year(r['date']))
+    lengths = defaultdict(list)
+    for r in kept:
+        lengths[group(r)].append(int(r['enwiki_bytes'] or 0))
+    for v in lengths.values():
+        v.sort()
+
+    def percentile(r):
+        v = lengths[group(r)]
+        return 100 * bisect.bisect_left(v, int(r['enwiki_bytes'] or 0)) / len(v)
+    return [r for r in kept if r['langs'] > C.TRIM_MAX_LANGS or percentile(r) >= C.TRIM_PERCENTILE]
 
 
 def main():
@@ -162,6 +203,7 @@ def main():
             continue
         kept.append(dict(
             qid=q, label=e['label'], description=e['description'], enwiki=e['enwiki'], langs=e['langs'],
+            enwiki_bytes=e['enwiki_bytes'],
             date=start[0].split('T')[0], date_precision=start[1],
             end_date=end[0].split('T')[0] if end else '', end_precision=end[1] if end else '',
             categories='|'.join(sorted(e['categories'])), types='|'.join(e['type_labels']),
@@ -169,7 +211,9 @@ def main():
             points='|'.join(f'{lon} {lat} {kind}' for (lon, lat), kind in sorted(pts.items())),
         ))
 
-    kept.sort(key=lambda r: -r['langs'])
+    trimmed = trim(kept)
+    removed[f'short article for its era and category ({C.TRIM_MAX_LANGS} or fewer languages)'] = len(kept) - len(trimmed)
+    kept = sorted(trimmed, key=lambda r: -r['langs'])
     with open(C.EVENTS_TSV, 'w', newline='') as fh:
         w = csv.DictWriter(fh, fieldnames=list(kept[0]), delimiter='\t', lineterminator='\n')
         w.writeheader()

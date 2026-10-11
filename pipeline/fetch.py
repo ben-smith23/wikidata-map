@@ -2,9 +2,10 @@
 
   1. Candidates: every dated, located event with an English Wikipedia article. One small query,
      always re-run so new Wikidata events are picked up.
-  2. Types, only for candidates with MIN_LANGS+ languages. The early rules (languages, types,
+  2. Types, only for candidates with at least the lowest MIN_LANGS cut. The early rules (languages, types,
      categories) are then applied straight away.
-  3. Labels, dates and locations, only for events that pass the early rules.
+  3. Labels, dates, locations and English Wikipedia article length, only for events that pass
+     the early rules.
 
 Everything after step 1 is incremental: each file has a <name>.done list of the IDs already
 queried, and only new IDs are fetched. Loosening a rule downloads just the newly admitted events.
@@ -12,8 +13,13 @@ Pass --refresh to wipe the cache and download everything again.
 """
 import csv
 import datetime
+import json
 import shutil
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import config as C
 import filter_events as F
@@ -115,6 +121,50 @@ def fetch_missing(name, columns, template, ids):
             fh.write('\n'.join(chunk) + '\n')
 
 
+def fetch_article_lengths(ev, ids):
+    """Size in bytes of each event's English Wikipedia article, 50 titles per API request."""
+    name = 'enwiki_lengths.tsv'
+    todo = sorted(set(ids) - F.fetched_ids(name))
+    if not todo:
+        print(f'  {name:<28} up to date')
+        return
+    print(f'  {name:<28} fetching {len(todo):,} new')
+    for start in range(0, len(todo), 50):
+        chunk = todo[start:start + 50]
+        lengths = wikipedia_lengths([ev[q]['enwiki'] for q in chunk])
+        write_rows(C.RAW / name, ['item', 'bytes'],
+                   [{'item': q, 'bytes': lengths.get(ev[q]['enwiki'], '')} for q in chunk], 'a')
+        with open(C.RAW / (name + '.done'), 'a') as fh:
+            fh.write('\n'.join(chunk) + '\n')
+
+
+def wikipedia_lengths(titles):
+    """{title as given: article length in bytes}, following redirects."""
+    params = urllib.parse.urlencode({'action': 'query', 'prop': 'info', 'redirects': 1, 'format': 'json',
+                                     'formatversion': 2, 'titles': '|'.join(titles)})
+    req = urllib.request.Request(f'https://en.wikipedia.org/w/api.php?{params}', headers={
+        'User-Agent': 'history-map/0.1 (https://github.com/ben-smith23/wikidata-map)'})
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.load(r)['query']
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 5:
+                raise
+            wait = int(e.headers.get('Retry-After') or 10 * (attempt + 1))
+            print(f'    rate limited, waiting {wait}s')
+            time.sleep(wait)
+    time.sleep(0.5)  # stay well under Wikipedia's rate limits
+    # map each requested title through normalisation and redirects to the page it ends up at
+    alias = {t: t for t in titles}
+    for key in ('normalized', 'redirects'):
+        step = {x['from']: x['to'] for x in res.get(key, [])}
+        alias = {t: step.get(a, a) for t, a in alias.items()}
+    length = {p['title']: p.get('length', '') for p in res['pages']}
+    return {t: length.get(a, '') for t, a in alias.items()}
+
+
 def column(name, col):
     return {r[col] for r in F.read(name) if r[col]}
 
@@ -130,7 +180,7 @@ def main():
 
     ev = F.load_candidates()
     fetch_missing('types.tsv', ['item', 'type', 'typeLabel'], TYPES,
-                  [q for q, e in ev.items() if e['langs'] >= C.MIN_LANGS])
+                  [q for q, e in ev.items() if e['langs'] >= C.LOWEST_MIN_LANGS])
     fetch_missing('type_ancestors.tsv', ['type', 'ancestor'], TYPE_ANCESTORS, column('types.tsv', 'type'))
 
     ev = F.load_candidates()  # now with types, so the early rules can run
@@ -138,6 +188,7 @@ def main():
     print(f'  {len(ev):,} candidates, {len(passing):,} pass the language and type rules')
     fetch_missing('labels.tsv', ['item', 'label', 'description'], LABELS, passing)
     fetch_missing('dates.tsv', ['item', 'prop', 'time', 'precision'], DATES, passing)
+    fetch_article_lengths(ev, passing)
     fetch_missing('locations.tsv', ['item', 'kind', 'location', 'locationLabel', 'coord', 'iso', 'continent', 'area'],
                   LOCATIONS, passing)
 

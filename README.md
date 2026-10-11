@@ -32,14 +32,13 @@ To change the rules, edit `pipeline/config.py` and re-run the last two steps; no
 
 ## What counts as an event
 
-Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276, P131 or P17), and has an English Wikipedia article. An event is kept (about 29k) if:
+Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276, P131 or P17), and has an English Wikipedia article. An event is kept (about 20k) if:
 
-- it has an article in **5+ Wikipedia languages**, which also serves as a measure of fame
+- it has articles in **enough Wikipedia languages for its category**: 5 for war, attacks, disasters, politics and uncategorised; 12 for elections; 40 for sport. Entertainment and eclipses only stay if they're also in another category. An event uses the lowest cut among its categories.
+- it **isn't a non-event**, judged by its Wikidata types or English Wikipedia title (the `NOT_EVENTS` table in `config.py`): myths, hypothetical and cancelled events, sub-topics like "COVID-19 pandemic in Italy", awards, trade fairs, holidays, eras, sport delegations, currencies, league seasons, numbered parliamentary terms and so on
 - it's **dated to the year or better**, using whichever of "point in time" and "start time" is more precise, and it **isn't in the future**
-- it **isn't sport, entertainment or an eclipse**, unless it's also a war, attack, disaster, political event or election. Sport with 40+ languages (Olympics, World Cups, but not league seasons) is kept.
-- it **isn't a non-event** going by its Wikidata types: awards, trade fairs, holidays, eras, TV shows, sport delegations, currencies, bilateral relations, numbered parliamentary terms and so on
-
-Elections and referendums are their own category (`election`), separate from `politics`.
+- it has a **usable location**
+- it **isn't a low-profile event with a short article**. Events with 7 or fewer languages are dropped if their English article is in the bottom 40% by length among events of the same era and category. Comparing within an era keeps this from penalising older events, whose articles are shorter across the board.
 
 Each event gets one or more points, all from a single source. That's its own coordinates (P625) if it has any. Otherwise it's whichever gives the more precise point: its "location" (P276) or its "located in the administrative territorial entity" (P131). Only if it has neither is its country (P17) used. Each point is labelled with how precise it is: `own`, `site`, `region`, `large_region`, `country` or `continent`.
 
