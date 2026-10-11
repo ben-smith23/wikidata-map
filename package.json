@@ -1,8 +1,0 @@
-{
-  "name": "wikidata-map",
-  "version": "1.0.0",
-  "description": "frontend to render density of Wikidata items on a map",
-  "repository": "git@github.com:wmde/wikidata-map.git",
-  "author": "addshore <addshorewiki@gmail.com",
-  "license": "MIT"
-}

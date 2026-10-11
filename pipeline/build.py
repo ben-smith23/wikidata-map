@@ -1,0 +1,35 @@
+"""Step 3: turn data/events.tsv into data/events.json, the compact file the map loads."""
+import csv
+import json
+
+import config as C
+
+
+def main():
+    with open(C.EVENTS_TSV) as fh:
+        rows = list(csv.DictReader(fh, delimiter='\t'))
+    events = []
+    for r in rows:
+        e = {
+            'id': r['qid'],
+            'name': r['label'],
+            'desc': r['description'],
+            'wiki': r['enwiki'],
+            'langs': int(r['langs']),
+            'date': r['date'],
+            'prec': int(r['date_precision']),
+            'cats': r['categories'].split('|') if r['categories'] else [],
+            'where': r['where'],
+            'pts': [[float(lon), float(lat), kind] for lon, lat, kind in (p.split(' ') for p in r['points'].split('|'))],
+        }
+        if r['end_date']:
+            e['end'], e['endPrec'] = r['end_date'], int(r['end_precision'])
+        events.append(e)
+    with open(C.EVENTS_JSON, 'w') as fh:
+        json.dump(events, fh, ensure_ascii=False, separators=(',', ':'))
+    print(f'wrote {len(events):,} events -> {C.EVENTS_JSON.relative_to(C.ROOT)} '
+          f'({C.EVENTS_JSON.stat().st_size / 1e6:.1f} MB)')
+
+
+if __name__ == '__main__':
+    main()
