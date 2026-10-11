@@ -116,7 +116,7 @@ def early_reason(q, e):
     """Why an event is dropped based on its languages and types alone, or None if it passes."""
     cats, labels = e['categories'], e['type_labels']
     protected = bool(cats & C.HISTORICAL)
-    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SEASON_LABEL.match(e['enwiki'])
+    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SPORT_EXCEPTION_EXCLUDES.search(e['enwiki'])
     only_noise = (any(C.DROP_IF_ONLY_TYPES.search(l) for l in labels)
                   and all(C.DROP_IF_ONLY_TYPES.search(l) or C.GENERIC_TYPES.match(l) for l in labels))
     return first_failed([
@@ -127,6 +127,8 @@ def early_reason(q, e):
          'type: draft, census, festival, pageant...'),
         (not protected and not big_sport and 'sport' in cats,
          f'sport under {C.SPORT_MIN_LANGS} languages, or a league season'),
+        (not protected and 'legislative term' in labels and C.NUMBERED_TERM_TITLE.match(e['enwiki']),
+         'numbered parliamentary term'),
         (not protected and cats & (C.DROPPED_CATEGORIES - {'sport'}), 'entertainment or eclipse'),
         (not protected and only_noise, 'not an event: award, trade fair, holiday, era...'),
     ])

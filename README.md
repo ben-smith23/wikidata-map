@@ -23,23 +23,25 @@ data/               generated, not in git
 The pipeline is plain Python 3 with no dependencies. Run it from the repo root:
 
 ```sh
-python3 pipeline/fetch.py          # ~10 min the first time; skips files already in data/raw/
+python3 pipeline/fetch.py          # incremental: only downloads events it hasn't seen before
 python3 pipeline/filter_events.py  # seconds; prints what it removed and why
 python3 pipeline/build.py
 ```
 
-To change the rules, edit `pipeline/config.py` and re-run the last two steps; no API calls are needed. To pick up new Wikidata edits, run `fetch.py --refresh`.
+To change the rules, edit `pipeline/config.py` and re-run the last two steps; no API calls are needed. Running `fetch.py` again picks up new events; `--refresh` re-downloads everything, which is rarely needed.
 
 ## What counts as an event
 
-Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276 or P131), and has an English Wikipedia article. An event is kept (about 21k) if:
+Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276, P131 or P17), and has an English Wikipedia article. An event is kept (about 29k) if:
 
 - it has an article in **5+ Wikipedia languages**, which also serves as a measure of fame
 - it's **dated to the year or better**, using whichever of "point in time" and "start time" is more precise, and it **isn't in the future**
-- it **isn't sport, entertainment or an eclipse**, unless it's also a war, attack, disaster or political event. Sport with 40+ languages (Olympics, World Cups, but not league seasons) is kept.
-- it **isn't a non-event** going by its Wikidata types: awards, trade fairs, holidays, eras, TV shows and so on
+- it **isn't sport, entertainment or an eclipse**, unless it's also a war, attack, disaster, political event or election. Sport with 40+ languages (Olympics, World Cups, but not league seasons) is kept.
+- it **isn't a non-event** going by its Wikidata types: awards, trade fairs, holidays, eras, TV shows, sport delegations, currencies, bilateral relations, numbered parliamentary terms and so on
 
-Each event gets one or more points, all from a single source. That's its own coordinates (P625) if it has any. Otherwise it's whichever gives the more precise point: its "location" (P276) or its "located in the administrative territorial entity" (P131). Each point is labelled with how precise it is: `own`, `site`, `region`, `large_region`, `country` or `continent`.
+Elections and referendums are their own category (`election`), separate from `politics`.
+
+Each event gets one or more points, all from a single source. That's its own coordinates (P625) if it has any. Otherwise it's whichever gives the more precise point: its "location" (P276) or its "located in the administrative territorial entity" (P131). Only if it has neither is its country (P17) used. Each point is labelled with how precise it is: `own`, `site`, `region`, `large_region`, `country` or `continent`.
 
 ## Credits
 
