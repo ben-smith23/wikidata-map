@@ -47,12 +47,3 @@ def query(sparql, retries=3):
             print(f'    query failed ({e}), retrying...')
             time.sleep(10 * (attempt + 1))
 
-
-def query_batched(template, qids):
-    """Run `template` (which contains {VALUES}) over qids in batches; yields rows."""
-    qids = list(qids)
-    for start in range(0, len(qids), BATCH_SIZE):
-        chunk = qids[start:start + BATCH_SIZE]
-        print(f'    {start + len(chunk):,} / {len(qids):,}', end='\r', flush=True)
-        yield from query(template.replace('{VALUES}', ' '.join('wd:' + q for q in chunk)))
-    print()

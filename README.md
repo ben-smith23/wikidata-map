@@ -32,14 +32,14 @@ To change the rules, edit `pipeline/config.py` and re-run the last two steps; no
 
 ## What counts as an event
 
-Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location, and has an English Wikipedia article: about 119k. An event is kept (about 21k) if:
+Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276 or P131), and has an English Wikipedia article. An event is kept (about 21k) if:
 
 - it has an article in **5+ Wikipedia languages**, which also serves as a measure of fame
 - it's **dated to the year or better**, using whichever of "point in time" and "start time" is more precise, and it **isn't in the future**
 - it **isn't sport, entertainment or an eclipse**, unless it's also a war, attack, disaster or political event. Sport with 40+ languages (Olympics, World Cups, but not league seasons) is kept.
 - it **isn't a non-event** going by its Wikidata types: awards, trade fairs, holidays, eras, TV shows and so on
 
-Each event gets one or more points. These are its own coordinates, or failing that, those of its locations (P276). Each point is labelled with how precise it is: `own`, `site`, `region`, `large_region`, `country` or `continent`.
+Each event gets one or more points, all from a single source. That's its own coordinates (P625) if it has any. Otherwise it's whichever gives the more precise point: its "location" (P276) or its "located in the administrative territorial entity" (P131). Each point is labelled with how precise it is: `own`, `site`, `region`, `large_region`, `country` or `continent`.
 
 ## Credits
 

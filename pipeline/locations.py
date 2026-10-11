@@ -39,18 +39,40 @@ def parse_point(coord):
     return (round(lon, 5), round(lat, 5)) if -180 <= lon <= 180 and -90 <= lat <= 90 else None
 
 
-def points_for(own_coords, borrowed):
-    """{(lon, lat): kind}. The event's own coordinates if it has usable ones, otherwise its locations'."""
-    pts = {p: 'own' for p in map(parse_point, own_coords) if p}
-    if pts:
-        return pts
-    for loc in borrowed.values():
+def _borrowed_points(locations):
+    pts = {}
+    for loc in locations.values():
         kind = location_kind(loc)
         for p in filter(None, map(parse_point, loc['coords'])):
             # if two locations share a point, keep the more precise kind
             if p not in pts or KINDS.index(kind) < KINDS.index(pts[p]):
                 pts[p] = kind
     return pts
+
+
+def best_kind(pts):
+    return min(pts.values(), key=KINDS.index)
+
+
+def points_for(own_coords, borrowed):
+    """Returns (source, {(lon, lat): kind}). `borrowed` maps a property (P276, P131) to its locations.
+
+    Uses the event's own coordinates if it has usable ones, otherwise the LOCATION_SOURCES property
+    whose most precise point beats the others'. Sources are never mixed, so an event with P276 = Paris
+    and P131 = Île-de-France gets just Paris."""
+    pts = {p: 'own' for p in map(parse_point, own_coords) if p}
+    if pts:
+        return 'P625', pts
+    source, best = None, {}
+    for prop in C.LOCATION_SOURCES:
+        candidate = _borrowed_points(borrowed.get(prop, {}))
+        if candidate and (not best or KINDS.index(best_kind(candidate)) < KINDS.index(best_kind(best))):
+            source, best = prop, candidate
+    if not best and C.LOCATION_FALLBACK:
+        fallback = _borrowed_points(borrowed.get(C.LOCATION_FALLBACK, {}))
+        if fallback:
+            source, best = C.LOCATION_FALLBACK, fallback
+    return source, best
 
 
 def spread_km(points):

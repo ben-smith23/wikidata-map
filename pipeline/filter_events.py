@@ -1,11 +1,16 @@
-"""Step 2: apply the rules in config.py to data/raw/ and write data/events.tsv. Local only, runs in seconds."""
+"""Step 2: apply the rules in config.py to data/raw/ and write data/events.tsv. Local only, runs in seconds.
+
+Rules come in two groups. Early rules need only the language count and Wikidata types, so fetch.py
+applies them before downloading anything else. Late rules need the dates and locations that are
+downloaded only for events that pass the early rules.
+"""
 import csv
 import datetime
 import re
 from collections import Counter, defaultdict
 
 import config as C
-from locations import KINDS, points_for, spread_km
+from locations import best_kind, points_for, spread_km
 
 TODAY = datetime.date.today()
 DATE = re.compile(r'^([+-]?\d+)-(\d\d)-(\d\d)')
@@ -13,26 +18,46 @@ PRECISION = {11: 'day', 10: 'month', 9: 'year'}
 
 
 def read(name):
-    with open(C.RAW / name) as fh:
-        yield from csv.DictReader(fh, delimiter='\t')
+    path = C.RAW / name
+    if path.exists():
+        with open(path) as fh:
+            yield from csv.DictReader(fh, delimiter='\t')
 
 
-def load():
-    """Everything in data/raw/, keyed by event QID."""
-    ev = {r['item']: dict(langs=int(r['sitelinks']), enwiki=r['enwiki'], types=set(), dates=defaultdict(list),
-                          own=set(), borrowed={}) for r in read('candidates.tsv')}
-    for r in read('labels.tsv'):
-        ev[r['item']].update(label=r['label'] or ev[r['item']]['enwiki'], description=r['description'])
+def fetched_ids(name):
+    """IDs already queried for data/raw/<name> (tracked by fetch.py, including ones with no results)."""
+    path = C.RAW / (name + '.done')
+    return set(path.read_text().split()) if path.exists() else set()
 
+
+def load_candidates():
+    """Every candidate with its language count, types and categories: all the early rules need."""
+    ev = {r['item']: dict(langs=int(r['sitelinks']), enwiki=r['enwiki'], types=set()) for r in read('candidates.tsv')}
     type_label, ancestors = {}, defaultdict(set)
     for r in read('types.tsv'):
-        ev[r['item']]['types'].add(r['type'])
+        if r['item'] in ev:
+            ev[r['item']]['types'].add(r['type'])
         type_label[r['type']] = r['typeLabel'] or r['type']
     for r in read('type_ancestors.tsv'):
         ancestors[r['type']].add(r['ancestor'])
+    root_to_cat = {root: cat for cat, roots in C.CATEGORIES.items() for root in roots}
+    for e in ev.values():
+        e['type_labels'] = sorted(type_label[t] for t in e['types'])
+        e['categories'] = {root_to_cat[a] for t in e['types'] for a in ancestors[t] if a in root_to_cat}
+    return ev
 
+
+def load_details(ev):
+    """Add labels, dates and locations, which exist only for events fetch.py downloaded them for."""
+    downloaded = fetched_ids('labels.tsv') & fetched_ids('dates.tsv') & fetched_ids('locations.tsv')
+    for q, e in ev.items():
+        e.update(downloaded=q in downloaded, label=e['enwiki'], description='',
+                 dates=defaultdict(list), own=set(), borrowed=defaultdict(dict))
+    for r in read('labels.tsv'):
+        if r['item'] in ev:
+            ev[r['item']].update(label=r['label'] or ev[r['item']]['enwiki'], description=r['description'])
     for r in read('dates.tsv'):
-        if DATE.match(r['time']):  # "unknown value" dates are blank nodes, not times
+        if r['item'] in ev and DATE.match(r['time']):  # "unknown value" dates are blank nodes, not times
             ev[r['item']]['dates'][r['prop']].append((r['time'], int(r['precision'])))
 
     location_classes, countries, location_ancestors = defaultdict(set), defaultdict(set), defaultdict(set)
@@ -43,11 +68,13 @@ def load():
     for r in read('location_countries.tsv'):
         countries[r['location']].add(r['country'])
     for r in read('locations.tsv'):
-        e = ev[r['item']]
+        e = ev.get(r['item'])
+        if e is None:
+            continue
         if r['kind'] == 'own':
             e['own'].add(r['coord'])
             continue
-        loc = e['borrowed'].setdefault(r['location'], dict(
+        loc = e['borrowed'][r['kind']].setdefault(r['location'], dict(  # kind is the property, e.g. P276
             coords=set(), iso=False, continent=False, area=0.0,
             classes=location_classes[r['location']], countries=len(countries[r['location']])))
         loc['coords'].add(r['coord'])
@@ -57,12 +84,6 @@ def load():
             loc['area'] = max(loc['area'], float(r['area']))
         except ValueError:
             pass
-
-    root_to_cat = {root: cat for cat, roots in C.CATEGORIES.items() for root in roots}
-    for e in ev.values():
-        e['type_labels'] = sorted(type_label[t] for t in e['types'])
-        e['categories'] = {root_to_cat[a] for t in e['types'] for a in ancestors[t] if a in root_to_cat}
-    return ev
 
 
 def year(t):
@@ -87,36 +108,53 @@ def is_future(t, precision):
     return False
 
 
-def reject_reason(q, e, start, pts):
-    """Why an event is dropped, or None to keep it. Rules are checked in order; the first match wins."""
-    cats, labels = e['categories'], e['type_labels']
-    protected = bool(cats & C.HISTORICAL)
-    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SEASON_LABEL.match(e['label'])
-    only_noise = (any(C.DROP_IF_ONLY_TYPES.search(l) for l in labels)
-                  and all(C.DROP_IF_ONLY_TYPES.search(l) or C.GENERIC_TYPES.match(l) for l in labels))
-    rules = [
-        (q in C.BLOCKLIST, 'blocklist'),
-        (e['langs'] < C.MIN_LANGS, f'fewer than {C.MIN_LANGS} languages'),
-        (not start or start[1] < C.MIN_DATE_PRECISION, 'date vaguer than a year, or unknown'),
-        (start and is_future(*start), 'in the future'),
-        (not protected and not big_sport and any(C.DROP_IF_ANY_TYPE.search(l) for l in labels),
-         'type: draft, census, festival, pageant...'),
-        (not protected and not big_sport and 'sport' in cats, f'sport under {C.SPORT_MIN_LANGS} languages, or a league season'),
-        (not protected and cats & (C.DROPPED_CATEGORIES - {'sport'}), 'entertainment or eclipse'),
-        (not protected and only_noise, 'not an event: award, trade fair, holiday, era...'),
-        (not pts, 'no usable Earth coordinate'),
-    ]
+def first_failed(rules):
     return next((reason for failed, reason in rules if failed), None)
 
 
+def early_reason(q, e):
+    """Why an event is dropped based on its languages and types alone, or None if it passes."""
+    cats, labels = e['categories'], e['type_labels']
+    protected = bool(cats & C.HISTORICAL)
+    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SEASON_LABEL.match(e['enwiki'])
+    only_noise = (any(C.DROP_IF_ONLY_TYPES.search(l) for l in labels)
+                  and all(C.DROP_IF_ONLY_TYPES.search(l) or C.GENERIC_TYPES.match(l) for l in labels))
+    return first_failed([
+        (q in C.BLOCKLIST, 'blocklist'),
+        (e['langs'] < C.MIN_LANGS, f'fewer than {C.MIN_LANGS} languages'),
+        (any(C.DROP_ALWAYS_IF_ANY_TYPE.search(l) for l in labels), 'not real: myth, hypothetical, fan convention...'),
+        (not protected and not big_sport and any(C.DROP_IF_ANY_TYPE.search(l) for l in labels),
+         'type: draft, census, festival, pageant...'),
+        (not protected and not big_sport and 'sport' in cats,
+         f'sport under {C.SPORT_MIN_LANGS} languages, or a league season'),
+        (not protected and cats & (C.DROPPED_CATEGORIES - {'sport'}), 'entertainment or eclipse'),
+        (not protected and only_noise, 'not an event: award, trade fair, holiday, era...'),
+    ])
+
+
+def late_reason(start, pts):
+    """Why an event that passed the early rules is dropped based on its dates and locations, or None."""
+    return first_failed([
+        (not start or start[1] < C.MIN_DATE_PRECISION, 'date vaguer than a year, or unknown'),
+        (start and is_future(*start), 'in the future'),
+        (not pts, 'no usable Earth coordinate'),
+    ])
+
+
 def main():
-    ev = load()
-    removed, kept = Counter(), []
+    ev = load_candidates()
+    load_details(ev)
+    removed, kept, not_downloaded = Counter(), [], 0
     for q, e in ev.items():
-        start = pick_date(e['dates']['P585'] + e['dates']['P580'])
-        end = pick_date(e['dates']['P582'], latest=True)
-        pts = points_for(e['own'], e['borrowed'])
-        reason = reject_reason(q, e, start, pts)
+        reason = early_reason(q, e)
+        if not reason and not e['downloaded']:
+            not_downloaded += 1
+            continue
+        if not reason:
+            start = pick_date(e['dates']['P585'] + e['dates']['P580'])
+            end = pick_date(e['dates']['P582'], latest=True)
+            source, pts = points_for(e['own'], e['borrowed'])
+            reason = late_reason(start, pts)
         if reason:
             removed[reason] += 1
             continue
@@ -125,7 +163,7 @@ def main():
             date=start[0].split('T')[0], date_precision=start[1],
             end_date=end[0].split('T')[0] if end else '', end_precision=end[1] if end else '',
             categories='|'.join(sorted(e['categories'])), types='|'.join(e['type_labels']),
-            where=min(pts.values(), key=KINDS.index), n_points=len(pts), spread_km=spread_km(list(pts)),
+            where=best_kind(pts), source=source, n_points=len(pts), spread_km=spread_km(list(pts)),
             points='|'.join(f'{lon} {lat} {kind}' for (lon, lat), kind in sorted(pts.items())),
         ))
 
@@ -135,9 +173,11 @@ def main():
         w.writeheader()
         w.writerows(kept)
 
-    print(f"raw data fetched {(C.RAW / 'FETCHED').read_text().strip()}: {len(ev):,} candidate events")
+    print(f"candidates fetched {(C.RAW / 'FETCHED').read_text().strip()}: {len(ev):,}")
     for reason, n in removed.most_common():
         print(f'  - {n:>7,}  {reason}')
+    if not_downloaded:
+        print(f'  ! {not_downloaded:>7,}  pass the rules but have no details yet: run fetch.py')
     print(f'kept {len(kept):,} -> {C.EVENTS_TSV.relative_to(C.ROOT)}\n')
     for label, counter in (
         ('categories', Counter(c for r in kept for c in (r['categories'].split('|') if r['categories'] else ['(none)']))),

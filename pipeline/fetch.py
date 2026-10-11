@@ -1,15 +1,25 @@
-"""Step 1: download everything we might filter on from Wikidata (via QLever) into data/raw/.
+"""Step 1: download from Wikidata (via QLever) only what the filter needs, into data/raw/.
 
-Deliberately broad: every dated, located event with an English Wikipedia article, regardless of
-language count or type. Filters are applied locally by filter_events.py, so changing them never
-needs a re-fetch. Each file is skipped if it already exists; pass --refresh to re-download all.
+  1. Candidates: every dated, located event with an English Wikipedia article. One small query,
+     always re-run so new Wikidata events are picked up.
+  2. Types, only for candidates with MIN_LANGS+ languages. The early rules (languages, types,
+     categories) are then applied straight away.
+  3. Labels, dates and locations, only for events that pass the early rules.
+
+Everything after step 1 is incremental: each file has a <name>.done list of the IDs already
+queried, and only new IDs are fetched. Loosening a rule downloads just the newly admitted events.
+Pass --refresh to wipe the cache and download everything again.
 """
 import csv
 import datetime
+import shutil
 import sys
 
-from config import RAW
-from sparql import query, query_batched
+import config as C
+import filter_events as F
+from sparql import BATCH_SIZE, query
+
+OWN, BORROWED = 'P625', C.LOCATION_SOURCES + ([C.LOCATION_FALLBACK] if C.LOCATION_FALLBACK else [])
 
 CANDIDATES = """
 SELECT ?item (SAMPLE(?sl) AS ?sitelinks) (SAMPLE(?title) AS ?enwiki) WHERE {
@@ -17,16 +27,10 @@ SELECT ?item (SAMPLE(?sl) AS ?sitelinks) (SAMPLE(?title) AS ?enwiki) WHERE {
   ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?title .
   ?item wikibase:sitelinks ?sl .
   { ?item wdt:P585 ?d } UNION { ?item wdt:P580 ?d }
-  { ?item wdt:P625 ?c } UNION { ?item wdt:P276 ?l . ?l wdt:P625 ?c }
+  { ?item wdt:%s ?c } %s
 } GROUP BY ?item
-"""
-
-LABELS = """
-SELECT ?item ?label ?description WHERE { VALUES ?item { {VALUES} }
-  OPTIONAL { ?item rdfs:label ?label FILTER(LANG(?label) = "en") }
-  OPTIONAL { ?item schema:description ?description FILTER(LANG(?description) = "en") }
-}
-"""
+""" % (OWN, ' '.join(f'UNION {{ ?item wdt:{p} ?l . ?l wdt:{OWN} ?c }}' for p in BORROWED))
+# (QLever silently returns nothing for FILTER(?sl >= n), so the language cut happens locally.)
 
 TYPES = """
 SELECT ?item ?type ?typeLabel WHERE { VALUES ?item { {VALUES} }
@@ -42,6 +46,13 @@ SELECT DISTINCT ?type ?ancestor WHERE { VALUES ?type { {VALUES} }
 }
 """
 
+LABELS = """
+SELECT ?item ?label ?description WHERE { VALUES ?item { {VALUES} }
+  OPTIONAL { ?item rdfs:label ?label FILTER(LANG(?label) = "en") }
+  OPTIONAL { ?item schema:description ?description FILTER(LANG(?description) = "en") }
+}
+"""
+
 DATES = """
 SELECT ?item ?prop ?time ?precision WHERE { VALUES ?item { {VALUES} }
   { ?item p:P585 ?s . ?s psv:P585 ?v . BIND("P585" AS ?prop) }
@@ -53,15 +64,16 @@ SELECT ?item ?prop ?time ?precision WHERE { VALUES ?item { {VALUES} }
 
 LOCATIONS = """
 SELECT ?item ?kind ?location ?locationLabel ?coord ?iso ?continent ?area WHERE { VALUES ?item { {VALUES} }
-  { ?item wdt:P625 ?coord . BIND("own" AS ?kind) }
+  { ?item wdt:%s ?coord . BIND("own" AS ?kind) }
   UNION
-  { ?item wdt:P276 ?location . ?location wdt:P625 ?coord . BIND("borrowed" AS ?kind)
+  { { %s }
+    ?location wdt:%s ?coord .
     OPTIONAL { ?location rdfs:label ?locationLabel FILTER(LANG(?locationLabel) = "en") }
     OPTIONAL { ?location wdt:P297 ?iso }
     OPTIONAL { ?location wdt:P31 wd:Q5107 . BIND(1 AS ?continent) }
     OPTIONAL { ?location wdt:P2046 ?area } }
 }
-"""
+""" % (OWN, ' UNION '.join(f'{{ ?item wdt:{p} ?location . BIND("{p}" AS ?kind) }}' for p in BORROWED), OWN)
 
 # What kind of place each borrowed location is, and which countries it lies in.
 LOCATION_TYPES = """
@@ -77,53 +89,63 @@ SELECT ?location ?country WHERE { VALUES ?location { {VALUES} }
 """
 
 
-def save(name, columns, rows):
-    path = RAW / name
-    tmp = path.with_suffix('.tmp')
-    n = 0
-    with open(tmp, 'w', newline='') as fh:
+def write_rows(path, columns, rows, mode):
+    new_file = mode == 'w' or not path.exists()
+    with open(path, mode, newline='') as fh:
         w = csv.writer(fh, delimiter='\t', lineterminator='\n')
-        w.writerow(columns)
+        if new_file:
+            w.writerow(columns)
         for r in rows:
             w.writerow([r.get(c, '') for c in columns])
-            n += 1
-    tmp.rename(path)
-    print(f'  wrote {name}: {n:,} rows')
 
 
-def read_column(name, column):
-    with open(RAW / name) as fh:
-        return sorted({r[column] for r in csv.DictReader(fh, delimiter='\t')})
+def fetch_missing(name, columns, template, ids):
+    """Query `template` for the IDs not fetched before and append the results to data/raw/<name>."""
+    done = F.fetched_ids(name)
+    todo = sorted(set(ids) - done)
+    if not todo:
+        print(f'  {name:<28} up to date ({len(done):,})')
+        return
+    print(f'  {name:<28} fetching {len(todo):,} new')
+    for start in range(0, len(todo), BATCH_SIZE):
+        chunk = todo[start:start + BATCH_SIZE]
+        rows = query(template.replace('{VALUES}', ' '.join('wd:' + q for q in chunk)))
+        write_rows(C.RAW / name, columns, rows, 'a')
+        with open(C.RAW / (name + '.done'), 'a') as fh:  # per batch, so an interrupted run resumes
+            fh.write('\n'.join(chunk) + '\n')
+
+
+def column(name, col):
+    return {r[col] for r in F.read(name) if r[col]}
 
 
 def main():
-    refresh = '--refresh' in sys.argv
-    RAW.mkdir(parents=True, exist_ok=True)
+    if '--refresh' in sys.argv and C.RAW.exists():
+        shutil.rmtree(C.RAW)
+    C.RAW.mkdir(parents=True, exist_ok=True)
 
-    def step(name, columns, rows_fn):
-        if (RAW / name).exists() and not refresh:
-            print(f'  {name} exists, skipping')
-            return
-        print(f'  fetching {name}')
-        save(name, columns, rows_fn())
+    print('  candidates.tsv               fetching')
+    write_rows(C.RAW / 'candidates.tsv', ['item', 'sitelinks', 'enwiki'], query(CANDIDATES), 'w')
+    (C.RAW / 'FETCHED').write_text(datetime.date.today().isoformat() + '\n')
 
-    step('candidates.tsv', ['item', 'sitelinks', 'enwiki'], lambda: query(CANDIDATES))
-    items = read_column('candidates.tsv', 'item')
-    step('labels.tsv', ['item', 'label', 'description'], lambda: query_batched(LABELS, items))
-    step('types.tsv', ['item', 'type', 'typeLabel'], lambda: query_batched(TYPES, items))
-    types = read_column('types.tsv', 'type')
-    step('type_ancestors.tsv', ['type', 'ancestor'], lambda: query_batched(TYPE_ANCESTORS, types))
-    step('dates.tsv', ['item', 'prop', 'time', 'precision'], lambda: query_batched(DATES, items))
-    step('locations.tsv', ['item', 'kind', 'location', 'locationLabel', 'coord', 'iso', 'continent', 'area'],
-         lambda: query_batched(LOCATIONS, items))
-    locations = [q for q in read_column('locations.tsv', 'location') if q]
-    step('location_types.tsv', ['location', 'type'], lambda: query_batched(LOCATION_TYPES, locations))
-    step('location_countries.tsv', ['location', 'country'], lambda: query_batched(LOCATION_COUNTRIES, locations))
-    location_types = read_column('location_types.tsv', 'type')
-    step('location_type_ancestors.tsv', ['type', 'ancestor'],
-         lambda: query_batched(TYPE_ANCESTORS, location_types))
+    ev = F.load_candidates()
+    fetch_missing('types.tsv', ['item', 'type', 'typeLabel'], TYPES,
+                  [q for q, e in ev.items() if e['langs'] >= C.MIN_LANGS])
+    fetch_missing('type_ancestors.tsv', ['type', 'ancestor'], TYPE_ANCESTORS, column('types.tsv', 'type'))
 
-    (RAW / 'FETCHED').write_text(datetime.date.today().isoformat() + '\n')
+    ev = F.load_candidates()  # now with types, so the early rules can run
+    passing = [q for q, e in ev.items() if F.early_reason(q, e) is None]
+    print(f'  {len(ev):,} candidates, {len(passing):,} pass the language and type rules')
+    fetch_missing('labels.tsv', ['item', 'label', 'description'], LABELS, passing)
+    fetch_missing('dates.tsv', ['item', 'prop', 'time', 'precision'], DATES, passing)
+    fetch_missing('locations.tsv', ['item', 'kind', 'location', 'locationLabel', 'coord', 'iso', 'continent', 'area'],
+                  LOCATIONS, passing)
+
+    locations = column('locations.tsv', 'location')
+    fetch_missing('location_types.tsv', ['location', 'type'], LOCATION_TYPES, locations)
+    fetch_missing('location_countries.tsv', ['location', 'country'], LOCATION_COUNTRIES, locations)
+    fetch_missing('location_type_ancestors.tsv', ['type', 'ancestor'], TYPE_ANCESTORS,
+                  column('location_types.tsv', 'type'))
 
 
 if __name__ == '__main__':
