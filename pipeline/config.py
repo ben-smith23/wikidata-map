@@ -60,12 +60,21 @@ CATEGORIES = {
 #             unless every=True: then every type must match (ignoring GENERIC_TYPES). That's for weak
 #             signals, so e.g. a pope's funeral that is also typed "public holiday" survives.
 #   title     regex on the English Wikipedia title
+#   classes   Wikidata classes: a type matches if it is one of these or a subclass. A type matches a
+#             rule if its label matches `types` OR it falls under `classes`; classes catch variants
+#             named differently, labels cover noise that has no clean class.
 #   items     specific QIDs
 #   category  the event must be in this category
 # Rules don't apply to events in a HISTORICAL category unless even_if_historical=True.
 # Rules are checked in order; the first match is reported as the reason.
 HISTORICAL = {'war', 'attack', 'disaster', 'politics', 'election'}
 GENERIC_TYPES = r'^(recurring event|recurring event edition|occurrence|event|planned event|annual event|historical event|Q\d+)$'
+
+# Exceptions: real events that a NOT_EVENTS rule would otherwise catch. They still need enough
+# languages, a date and a location.
+KEEP = {
+    'Q3704511',  # Decimal Day (UK switch to decimal currency, 1971), caught by the currency class
+}
 
 NOT_EVENTS = [
     dict(reason='blocklist', even_if_historical=True, items={
@@ -78,7 +87,11 @@ NOT_EVENTS = [
         'Q758861',   # USSR State Prize: an award, typed as a prize plus "title of honor"
     }),
     dict(reason='not real: myth, hypothetical, cancelled, Marian title, fan convention', even_if_historical=True,
-         types=r'myth|hypothetical|cancel(?!led election)|title of mary|fan convention|anime convention|gaming convention'),
+         types=r'myth|hypothetical|cancel(?!led election)|title of mary|fan convention|anime convention|gaming convention',
+         classes={'Q12827256', 'Q24336068', 'Q390248',               # myth, mythical war, myth of origins
+                  'Q55118684', 'Q114350932', 'Q87479384',            # cancelled: sports event, military op, due to COVID
+                  'Q1509831', 'Q1129398', 'Q548126'}),               # title of Mary, fan convention, anime convention
+         # (not the broad "cancelled event" class: "cancelled election" sits under it)
          # Trojan War ("mythical war"), 1944 Winter Olympics (cancelled; but annulled elections did happen); fan conventions count as
          # politics via "convention"
     dict(reason='sub-topic or aggregate, not an event', even_if_historical=True, title='|'.join([
@@ -96,13 +109,23 @@ NOT_EVENTS = [
         r'currency|coin type|banknote',                              # US dollar, French franc, £10 note
         r'anthem|magazine|streaming|train service|same-sex marriage|presidential campaign',
         r'movement in cinema|painting movement',                     # French New Wave
-    ])),
+    ]), classes={
+        'Q31603', 'Q39825', 'Q4350743', 'Q2658935',                 # draft, census (x2), beauty contest
+        'Q27787439', 'Q41582469', 'Q868557', 'Q4801521',            # film/music festival editions, music/arts festival
+        'Q54802199', 'Q110288240', 'Q2231681',                      # Eurovision entries & editions, World Archery Ch.
+        'Q130192067', 'Q94998068',                                  # Olympic opening/closing ceremony
+        'Q26213387', 'Q46195901', 'Q26760286', 'Q35823051',         # Olympic/Paralympic delegations, World Athletics entries
+        'Q17544377', 'Q8142', 'Q47433', 'Q23691',                   # history of a country, currency, banknote, anthem
+        'Q847906', 'Q63241860', 'Q17422',                           # online magazine, streaming service, same-sex marriage
+        'Q3001152', 'Q3326867', 'Q155930',                          # cinema/painting movement, water transport
+    }),
     dict(reason='league season, group stage or Olympic bid', category='sport', title='|'.join([
         r'^\d{4}[–-]\d{2,4} ',   # "2017–18 Premier League": Wikidata types these like World Cups
         r' Group [A-H]$',        # "2018 FIFA World Cup Group A"
         r'^bids? for ',          # "Bids for the 2012 Summer Olympics"
     ])),
-    dict(reason='numbered parliamentary term', types=r'^legislative term$', title=r'^\d+(st|nd|rd|th) '),
+    dict(reason='numbered parliamentary term', types=r'^legislative term$', classes={'Q15238777'},
+         title=r'^\d+(st|nd|rd|th) '),
          # "117th United States Congress"; one-off assemblies (Estates General of 1789) are typed the same
     dict(reason='not an event: award, trade fair, holiday, era...', every=True, types='|'.join([
         r'holiday|commemoration|anniversary|observance|\bpride\b|festivity|carnival|mardi gras|world day',
@@ -118,7 +141,13 @@ NOT_EVENTS = [
         r'gospel episode|narrative event|pericope|legend|myth|anecdote|paranormal|artistic theme|resurrection',
         r'apparition|miracle',                                              # Lourdes apparitions
         # (art exhibitions are deliberately not here: Salon des Refusés, Armory Show, Degenerate Art)
-    ])),
+    ]), classes={
+        'Q4504495', 'Q2558684', 'Q51404', 'Q4618',                  # award ceremony, world day, Pride parade, Carnival
+        'Q253946', 'Q1156329', 'Q2613738',                          # fashion week, auto show, computer expo
+        'Q15416', 'Q526877', 'Q11032', 'Q178651', 'Q20603222',      # TV programme, web series, newspaper, interview, classical music competition
+        'Q4281830', 'Q3326717', 'Q465299',                          # mark (currency), literary movement, archaeological culture
+        'Q106355253', 'Q507850', 'Q950249', 'Q26913948',            # gospel episode, Marian apparition, Eucharistic miracle, legendary battle
+    }),
 ]
 
 # --- Locations ------------------------------------------------------------------------

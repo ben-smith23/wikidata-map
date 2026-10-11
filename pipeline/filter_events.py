@@ -45,6 +45,8 @@ def load_candidates():
     for e in ev.values():
         e['type_labels'] = sorted(type_label[t] for t in e['types'])
         e['categories'] = {root_to_cat[a] for t in e['types'] for a in ancestors[t] if a in root_to_cat}
+        # each type as (English label, the type and all its superclasses), for the NOT_EVENTS rules
+        e['type_info'] = [(type_label[t], ancestors[t] | {t}) for t in e['types']]
     return ev
 
 
@@ -123,7 +125,8 @@ def language_cut(cats):
 
 
 NOT_EVENTS = [dict(rule, types=re.compile(rule['types'], re.I) if 'types' in rule else None,
-                   title=re.compile(rule['title'], re.I) if 'title' in rule else None)
+                   title=re.compile(rule['title'], re.I) if 'title' in rule else None,
+                   classes=set(rule.get('classes', ())))
               for rule in C.NOT_EVENTS]
 GENERIC_TYPES = re.compile(C.GENERIC_TYPES, re.I)
 
@@ -138,11 +141,13 @@ def is_not_event(rule, q, e):
         return False
     if rule['title'] and not rule['title'].search(e['enwiki']):
         return False
-    if rule['types']:
-        labels = e['type_labels']
-        if not any(rule['types'].search(l) for l in labels):
+    if rule['types'] or rule['classes']:
+        def hit(label, classes):  # a type matches by English name or by being under one of the classes
+            return bool((rule['types'] and rule['types'].search(label)) or rule['classes'] & classes)
+        info = e['type_info']
+        if not any(hit(l, c) for l, c in info):
             return False
-        if rule.get('every') and not all(rule['types'].search(l) or GENERIC_TYPES.match(l) for l in labels):
+        if rule.get('every') and not all(hit(l, c) or GENERIC_TYPES.match(l) for l, c in info):
             return False
     return True
 
@@ -154,6 +159,8 @@ def early_reason(q, e):
         return 'only in dropped categories (entertainment, eclipse)'
     if e['langs'] < cut:
         return f'fewer than {cut} languages'
+    if q in C.KEEP:
+        return None
     return next((rule['reason'] for rule in NOT_EVENTS if is_not_event(rule, q, e)), None)
 
 

@@ -35,7 +35,7 @@ To change the rules, edit `pipeline/config.py` and re-run the last two steps; no
 Candidates are every Wikidata item that is an occurrence (Q1190554), has a date and a location (P625, P276, P131 or P17), and has an English Wikipedia article. An event is kept (about 20k) if:
 
 - it has articles in **enough Wikipedia languages for its category**: 5 for war, attacks, disasters, politics and uncategorised; 12 for elections; 40 for sport. Entertainment and eclipses only stay if they're also in another category. An event uses the lowest cut among its categories.
-- it **isn't a non-event**, judged by its Wikidata types or English Wikipedia title (the `NOT_EVENTS` table in `config.py`): myths, hypothetical and cancelled events, sub-topics like "COVID-19 pandemic in Italy", awards, trade fairs, holidays, eras, sport delegations, currencies, league seasons, numbered parliamentary terms and so on
+- it **isn't a non-event**, judged by its Wikidata types and classes or its English Wikipedia title (the `NOT_EVENTS` table in `config.py`, with a `KEEP` list for exceptions): myths, hypothetical and cancelled events, sub-topics like "COVID-19 pandemic in Italy", awards, trade fairs, holidays, eras, sport delegations, currencies, league seasons, numbered parliamentary terms and so on
 - it's **dated to the year or better**, using whichever of "point in time" and "start time" is more precise, and it **isn't in the future**
 - it has a **usable location**
 - it **isn't a low-profile event with a short article**. Events with 7 or fewer languages are dropped if their English article is in the bottom 40% by length among events of the same era and category. Comparing within an era keeps this from penalising older events, whose articles are shorter across the board.

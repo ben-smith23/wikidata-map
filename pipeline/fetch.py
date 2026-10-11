@@ -52,6 +52,13 @@ SELECT DISTINCT ?type ?ancestor WHERE { VALUES ?type { {VALUES} }
 }
 """
 
+# English names of every class in the type hierarchy, so rules in config.py can name classes.
+CLASS_LABELS = """
+SELECT ?class ?label WHERE { VALUES ?class { {VALUES} }
+  ?class rdfs:label ?label FILTER(LANG(?label) = "en")
+}
+"""
+
 LABELS = """
 SELECT ?item ?label ?description WHERE { VALUES ?item { {VALUES} }
   OPTIONAL { ?item rdfs:label ?label FILTER(LANG(?label) = "en") }
@@ -182,6 +189,7 @@ def main():
     fetch_missing('types.tsv', ['item', 'type', 'typeLabel'], TYPES,
                   [q for q, e in ev.items() if e['langs'] >= C.LOWEST_MIN_LANGS])
     fetch_missing('type_ancestors.tsv', ['type', 'ancestor'], TYPE_ANCESTORS, column('types.tsv', 'type'))
+    fetch_missing('class_labels.tsv', ['class', 'label'], CLASS_LABELS, column('type_ancestors.tsv', 'ancestor'))
 
     ev = F.load_candidates()  # now with types, so the early rules can run
     passing = [q for q, e in ev.items() if F.early_reason(q, e) is None]
