@@ -1,29 +1,22 @@
-"""Every filtering rule lives here. Change a value, re-run filter_events.py; no API calls needed."""
+"""Every rule that decides which events are on the map. Edit, then re-run filter_events.py (no API calls)."""
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW = ROOT / 'data' / 'raw'          # API results, cached by fetch.py
-EVENTS_TSV = ROOT / 'data' / 'events.tsv'    # output of filter_events.py
-EVENTS_JSON = ROOT / 'data' / 'events.json'  # output of build.py (what the map loads)
+RAW = ROOT / 'data' / 'raw'                  # fetch.py writes here
+EVENTS_TSV = ROOT / 'data' / 'events.tsv'    # filter_events.py writes the kept events here
+EVENTS_JSON = ROOT / 'data' / 'events.json'  # build.py writes the file the map loads here
 
-# --- Which events -----------------------------------------------------------
+# --- Fame -----------------------------------------------------------------------
 # Number of Wikipedia language editions with an article about the event.
 MIN_LANGS = 5
 
+# --- Dates ------------------------------------------------------------------------
 # Coarsest date we accept. Wikidata precision: 11=day, 10=month, 9=year, 8=decade, 7=century.
 MIN_DATE_PRECISION = 9
 
-# Sport is dropped unless it has at least this many languages (Olympics, World Cups).
-SPORT_MIN_LANGS = 40
-
-# Specific items that slip through every rule.
-BLOCKLIST = {
-    'Q4115189',  # Wikidata Sandbox (test item)
-}
-
-# --- Categories ---------------------------------------------------------------
-# An event belongs to a category if any of its types is a subclass of one of these.
+# --- Categories ---------------------------------------------------------------------
+# An event is in a category if any of its types is a subclass of one of these Wikidata classes.
 CATEGORIES = {
     'war': ['Q178561', 'Q198', 'Q350604', 'Q180684', 'Q645883', 'Q188055'],
     # battle, war, armed conflict, conflict, military operation, siege
@@ -41,32 +34,56 @@ CATEGORIES = {
     # solar eclipse, eclipse
 }
 
-# Events in these categories always stay, even if they are also in a dropped category.
+# Events in a HISTORICAL category are never dropped by the category or type-name rules below.
 HISTORICAL = {'war', 'attack', 'disaster', 'politics'}
+DROPPED_CATEGORIES = {'sport', 'entertainment', 'eclipse'}
 
-# Dropped unless the event is also HISTORICAL (sport has the SPORT_MIN_LANGS exception).
-DROPPED = {'sport', 'entertainment', 'eclipse'}
+# Exception: sport with this many languages stays (Olympics, World Cups)...
+SPORT_MIN_LANGS = 40
+# ...except league seasons. Wikidata types them like World Cups, so match the name instead.
+SEASON_LABEL = re.compile(r'^\d{4}[–-]\d{2,4} ')  # "2017–18 Premier League"
 
-# Types Wikidata doesn't file under the roots above, matched on their English label.
-JUNK_TYPE_LABELS = re.compile(r'\bdraft\b|\bcensus\b|^road$|^water transport$', re.I)
-ENTERTAINMENT_TYPE_LABELS = re.compile(
-    r'festival|pageant|eurovision|archery championships|olympic games (opening|closing) ceremony', re.I)
+# --- Type-name rules ------------------------------------------------------------------
+# For non-events Wikidata doesn't file under the categories above, matched on English type labels.
 
-# --- Locations ----------------------------------------------------------------
-# When an event has no coordinate of its own we borrow its location's, and record how vague that is:
-#   site < region < large_region < country < continent
-# Rules are checked in this order; the first match wins (see location_kind in filter_events.py):
-#   1. continent                    -> continent
-#   2. has an ISO country code      -> country (or site, if smaller than REGION_MIN_AREA, e.g. Monaco)
-#   3. LOCATION_CLASSES['country']  -> country
-#   4. LOCATION_CLASSES['site']     -> site (cities stay precise however large their area)
-#   5. has an area                  -> site / region / large_region by the thresholds below
-#   6. LOCATION_CLASSES['large_region'] -> large_region
-#   7. LOCATION_CLASSES['region']   -> region, or large_region if it spans 0 or 3+ countries
-#   8. anything else                -> site (buildings, stadiums, battlefields, lakes...)
-REGION_MIN_AREA = 1_000
+# Strong signal: dropped if ANY of the event's types matches.
+DROP_IF_ANY_TYPE = re.compile('|'.join([
+    r'\bdraft\b|\bcensus\b|^road$|^water transport$',            # NBA draft, census, mislabelled roads
+    r'festival|pageant|eurovision|archery championships',        # film festivals, Miss Universe
+    r'olympic games (opening|closing) ceremony',
+]), re.I)
+
+# Weak signal: dropped only if EVERY type matches this (or is GENERIC), so real events that also
+# carry an odd type survive, e.g. a pope's funeral that Wikidata also calls a "public holiday".
+DROP_IF_ONLY_TYPES = re.compile('|'.join([
+    r'holiday|commemoration|anniversary|observance|\bpride\b|festivity|carnival|mardi gras',  # April Fools' Day
+    r'\bawards?\b|\bprize\b|lecture series|^lecture',                       # Golden Lion, MTV EMAs
+    r'trade fair|fashion week|auto show|computer expo|toy fair|motor show|video game|cosplay|^expo$',  # CeBIT
+    r'delegation|nation at the',                                            # "Greece at the 2000 Olympics"
+    r'television|\btv\b|web series|news|radio|newspaper|^university$|^organization$|media outlet',
+    r'song contest|national final|reality|interview|film$',                 # Bundesvision, Survivor
+    r'currency|^mark$',                                                     # Deutsche Mark
+    r'art movement|art style|cultural movement|golden age|^era$|periodization|archaeological culture',
+    r'^historical period$|decade|^style',                                   # Roaring Twenties
+    r'gospel episode|narrative event|pericope|legend|myth|anecdote|paranormal|artistic theme|resurrection',
+    r'apparition|miracle',                                                  # Lourdes apparitions
+]), re.I)
+GENERIC_TYPES = re.compile(
+    r'^(recurring event|recurring event edition|occurrence|event|planned event|annual event|historical event|Q\d+)$',
+    re.I)
+
+# Specific items that slip through every rule.
+BLOCKLIST = {
+    'Q4115189',  # Wikidata Sandbox (test item)
+}
+
+# --- Locations ------------------------------------------------------------------------
+# When an event has no coordinate of its own we borrow its location's (P276), and record how vague
+# that is: site < region < large_region < country < continent. See locations.location_kind for the
+# order the rules are checked in.
+REGION_MIN_AREA = 1_000        # km²; smaller than this is a site
 LARGE_REGION_MIN_AREA = 50_000
-REGION_MAX_COUNTRIES = 2
+REGION_MAX_COUNTRIES = 2       # a region spanning 0 or more countries than this is a large region
 
 LOCATION_CLASSES = {
     'country': ['Q3024240'],

@@ -11,7 +11,7 @@ import sys
 from config import RAW
 from sparql import query, query_batched
 
-EVENTS = """
+CANDIDATES = """
 SELECT ?item (SAMPLE(?sl) AS ?sitelinks) (SAMPLE(?title) AS ?enwiki) WHERE {
   ?item wdt:P31/wdt:P279* wd:Q1190554 .
   ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?title .
@@ -107,8 +107,8 @@ def main():
         print(f'  fetching {name}')
         save(name, columns, rows_fn())
 
-    step('events.tsv', ['item', 'sitelinks', 'enwiki'], lambda: query(EVENTS))
-    items = read_column('events.tsv', 'item')
+    step('candidates.tsv', ['item', 'sitelinks', 'enwiki'], lambda: query(CANDIDATES))
+    items = read_column('candidates.tsv', 'item')
     step('labels.tsv', ['item', 'label', 'description'], lambda: query_batched(LABELS, items))
     step('types.tsv', ['item', 'type', 'typeLabel'], lambda: query_batched(TYPES, items))
     types = read_column('types.tsv', 'type')

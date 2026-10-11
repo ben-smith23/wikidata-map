@@ -1,16 +1,15 @@
 """Step 2: apply the rules in config.py to data/raw/ and write data/events.tsv. Local only, runs in seconds."""
 import csv
 import datetime
-import math
 import re
 from collections import Counter, defaultdict
 
 import config as C
+from locations import KINDS, points_for, spread_km
 
 TODAY = datetime.date.today()
 DATE = re.compile(r'^([+-]?\d+)-(\d\d)-(\d\d)')
-POINT = re.compile(r'^POINT\((\S+) (\S+)\)$')  # Earth coordinates only; other globes are prefixed with a URI
-WHERE_ORDER = ['own', 'site', 'region', 'large_region', 'country', 'continent']
+PRECISION = {11: 'day', 10: 'month', 9: 'year'}
 
 
 def read(name):
@@ -19,30 +18,38 @@ def read(name):
 
 
 def load():
-    ev = {r['item']: dict(langs=int(r['sitelinks']), enwiki=r['enwiki']) for r in read('events.tsv')}
+    """Everything in data/raw/, keyed by event QID."""
+    ev = {r['item']: dict(langs=int(r['sitelinks']), enwiki=r['enwiki'], types=set(), dates=defaultdict(list),
+                          own=set(), borrowed={}) for r in read('candidates.tsv')}
     for r in read('labels.tsv'):
         ev[r['item']].update(label=r['label'] or ev[r['item']]['enwiki'], description=r['description'])
 
-    types, type_label = defaultdict(set), {}
+    type_label, ancestors = {}, defaultdict(set)
     for r in read('types.tsv'):
-        types[r['item']].add(r['type'])
+        ev[r['item']]['types'].add(r['type'])
         type_label[r['type']] = r['typeLabel'] or r['type']
-    ancestors = defaultdict(set)
     for r in read('type_ancestors.tsv'):
         ancestors[r['type']].add(r['ancestor'])
 
-    dates = defaultdict(lambda: defaultdict(list))
     for r in read('dates.tsv'):
         if DATE.match(r['time']):  # "unknown value" dates are blank nodes, not times
-            dates[r['item']][r['prop']].append((r['time'], int(r['precision'])))
+            ev[r['item']]['dates'][r['prop']].append((r['time'], int(r['precision'])))
 
-    own, borrowed = defaultdict(set), defaultdict(dict)
+    location_classes, countries, location_ancestors = defaultdict(set), defaultdict(set), defaultdict(set)
+    for r in read('location_type_ancestors.tsv'):
+        location_ancestors[r['type']].add(r['ancestor'])
+    for r in read('location_types.tsv'):
+        location_classes[r['location']] |= location_ancestors[r['type']]
+    for r in read('location_countries.tsv'):
+        countries[r['location']].add(r['country'])
     for r in read('locations.tsv'):
+        e = ev[r['item']]
         if r['kind'] == 'own':
-            own[r['item']].add(r['coord'])
+            e['own'].add(r['coord'])
             continue
-        loc = borrowed[r['item']].setdefault(r['location'], dict(
-            label=r['locationLabel'] or r['location'], coords=set(), iso=False, continent=False, area=0.0))
+        loc = e['borrowed'].setdefault(r['location'], dict(
+            coords=set(), iso=False, continent=False, area=0.0,
+            classes=location_classes[r['location']], countries=len(countries[r['location']])))
         loc['coords'].add(r['coord'])
         loc['iso'] |= bool(r['iso'])
         loc['continent'] |= bool(r['continent'])
@@ -51,20 +58,11 @@ def load():
         except ValueError:
             pass
 
-    # What kind of place each borrowed location is (all superclasses of its types) and its country count
-    location_ancestors = defaultdict(set)
-    for r in read('location_type_ancestors.tsv'):
-        location_ancestors[r['type']].add(r['ancestor'])
-    location_classes = defaultdict(set)
-    for r in read('location_types.tsv'):
-        location_classes[r['location']] |= location_ancestors[r['type']]
-    countries = defaultdict(set)
-    for r in read('location_countries.tsv'):
-        countries[r['location']].add(r['country'])
-    for locs in borrowed.values():
-        for q, loc in locs.items():
-            loc['classes'], loc['countries'] = location_classes[q], len(countries[q])
-    return ev, types, type_label, ancestors, dates, own, borrowed
+    root_to_cat = {root: cat for cat, roots in C.CATEGORIES.items() for root in roots}
+    for e in ev.values():
+        e['type_labels'] = sorted(type_label[t] for t in e['types'])
+        e['categories'] = {root_to_cat[a] for t in e['types'] for a in ancestors[t] if a in root_to_cat}
+    return ev
 
 
 def year(t):
@@ -89,106 +87,45 @@ def is_future(t, precision):
     return False
 
 
-LOCATION_CLASSES = {kind: set(qids) for kind, qids in C.LOCATION_CLASSES.items()}
-
-
-def location_kind(loc):
-    """How vague a borrowed location is. Rule order is documented in config.py."""
-    is_a = lambda kind: bool(loc['classes'] & LOCATION_CLASSES[kind])
-    if loc['continent']:
-        return 'continent'
-    if loc['iso']:
-        return 'site' if 0 < loc['area'] < C.REGION_MIN_AREA else 'country'
-    if is_a('country'):
-        return 'country'
-    if is_a('site'):
-        return 'site'
-    if loc['area']:
-        if loc['area'] > C.LARGE_REGION_MIN_AREA:
-            return 'large_region'
-        return 'region' if loc['area'] > C.REGION_MIN_AREA else 'site'
-    if is_a('large_region'):
-        return 'large_region'
-    if is_a('region'):
-        return 'region' if 1 <= loc['countries'] <= C.REGION_MAX_COUNTRIES else 'large_region'
-    return 'site'
-
-
-def parse_point(coord):
-    m = POINT.match(coord)
-    if not m:
-        return None
-    lon, lat = float(m.group(1)), float(m.group(2))
-    return (round(lon, 5), round(lat, 5)) if -180 <= lon <= 180 and -90 <= lat <= 90 else None
-
-
-def points_for(q, own, borrowed):
-    """Own coordinates if the event has any usable ones, otherwise those of its locations."""
-    pts = {p: 'own' for p in map(parse_point, own[q]) if p}
-    if pts:
-        return pts
-    for loc in borrowed[q].values():
-        kind = location_kind(loc)
-        for p in filter(None, map(parse_point, loc['coords'])):
-            # if two locations share a point, keep the more precise kind
-            if p not in pts or WHERE_ORDER.index(kind) < WHERE_ORDER.index(pts[p]):
-                pts[p] = kind
-    return pts
-
-
-def spread_km(points):
-    def hav(a, b):
-        lon1, lat1, lon2, lat2 = map(math.radians, (*a, *b))
-        h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
-        return 2 * 6371 * math.asin(math.sqrt(min(1, h)))
-    return round(max((hav(a, b) for i, a in enumerate(points) for b in points[i + 1:]), default=0))
+def reject_reason(q, e, start, pts):
+    """Why an event is dropped, or None to keep it. Rules are checked in order; the first match wins."""
+    cats, labels = e['categories'], e['type_labels']
+    protected = bool(cats & C.HISTORICAL)
+    big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS and not C.SEASON_LABEL.match(e['label'])
+    only_noise = (any(C.DROP_IF_ONLY_TYPES.search(l) for l in labels)
+                  and all(C.DROP_IF_ONLY_TYPES.search(l) or C.GENERIC_TYPES.match(l) for l in labels))
+    rules = [
+        (q in C.BLOCKLIST, 'blocklist'),
+        (e['langs'] < C.MIN_LANGS, f'fewer than {C.MIN_LANGS} languages'),
+        (not start or start[1] < C.MIN_DATE_PRECISION, 'date vaguer than a year, or unknown'),
+        (start and is_future(*start), 'in the future'),
+        (not protected and not big_sport and any(C.DROP_IF_ANY_TYPE.search(l) for l in labels),
+         'type: draft, census, festival, pageant...'),
+        (not protected and not big_sport and 'sport' in cats, f'sport under {C.SPORT_MIN_LANGS} languages, or a league season'),
+        (not protected and cats & (C.DROPPED_CATEGORIES - {'sport'}), 'entertainment or eclipse'),
+        (not protected and only_noise, 'not an event: award, trade fair, holiday, era...'),
+        (not pts, 'no usable Earth coordinate'),
+    ]
+    return next((reason for failed, reason in rules if failed), None)
 
 
 def main():
-    ev, types, type_label, ancestors, dates, own, borrowed = load()
-    root_to_cat = {root: cat for cat, roots in C.CATEGORIES.items() for root in roots}
-    junk_types = {t for t, l in type_label.items() if C.JUNK_TYPE_LABELS.search(l)}
-    ent_types = {t for t, l in type_label.items() if C.ENTERTAINMENT_TYPE_LABELS.search(l)}
-
+    ev = load()
     removed, kept = Counter(), []
     for q, e in ev.items():
-        cats = {root_to_cat[a] for t in types[q] for a in ancestors[t] if a in root_to_cat}
-        historical = bool(cats & C.HISTORICAL)
-        big_sport = 'sport' in cats and e['langs'] >= C.SPORT_MIN_LANGS
-        start = pick_date(dates[q]['P585'] + dates[q]['P580'])
-        end = pick_date(dates[q]['P582'], latest=True)
-        pts = points_for(q, own, borrowed)
-
-        if q in C.BLOCKLIST:
-            reason = 'blocklist'
-        elif e['langs'] < C.MIN_LANGS:
-            reason = f'fewer than {C.MIN_LANGS} languages'
-        elif not start or start[1] < C.MIN_DATE_PRECISION:
-            reason = 'date vaguer than a year (or unknown)'
-        elif is_future(*start):
-            reason = 'in the future'
-        elif types[q] & junk_types and not historical:
-            reason = 'junk type (draft, census, road...)'
-        elif types[q] & ent_types and not historical and not big_sport:
-            reason = 'festival / pageant / Eurovision'
-        elif 'sport' in cats and not historical and not big_sport:
-            reason = f'sport under {C.SPORT_MIN_LANGS} languages'
-        elif cats & (C.DROPPED - {'sport'}) and not historical:
-            reason = 'entertainment / eclipse'
-        elif not pts:
-            reason = 'no usable Earth coordinate'
-        else:
-            reason = None
-
+        start = pick_date(e['dates']['P585'] + e['dates']['P580'])
+        end = pick_date(e['dates']['P582'], latest=True)
+        pts = points_for(e['own'], e['borrowed'])
+        reason = reject_reason(q, e, start, pts)
         if reason:
             removed[reason] += 1
             continue
         kept.append(dict(
             qid=q, label=e['label'], description=e['description'], enwiki=e['enwiki'], langs=e['langs'],
-            date=start[0][:start[0].index('T')], date_precision=start[1],
-            end_date=end[0][:end[0].index('T')] if end else '', end_precision=end[1] if end else '',
-            categories='|'.join(sorted(cats)), types='|'.join(sorted(type_label[t] for t in types[q])),
-            where=min(pts.values(), key=WHERE_ORDER.index), n_points=len(pts), spread_km=spread_km(list(pts)),
+            date=start[0].split('T')[0], date_precision=start[1],
+            end_date=end[0].split('T')[0] if end else '', end_precision=end[1] if end else '',
+            categories='|'.join(sorted(e['categories'])), types='|'.join(e['type_labels']),
+            where=min(pts.values(), key=KINDS.index), n_points=len(pts), spread_km=spread_km(list(pts)),
             points='|'.join(f'{lon} {lat} {kind}' for (lon, lat), kind in sorted(pts.items())),
         ))
 
@@ -198,14 +135,13 @@ def main():
         w.writeheader()
         w.writerows(kept)
 
-    fetched = (C.RAW / 'FETCHED').read_text().strip()
-    print(f'raw data fetched {fetched}: {len(ev):,} events')
+    print(f"raw data fetched {(C.RAW / 'FETCHED').read_text().strip()}: {len(ev):,} candidate events")
     for reason, n in removed.most_common():
         print(f'  - {n:>7,}  {reason}')
     print(f'kept {len(kept):,} -> {C.EVENTS_TSV.relative_to(C.ROOT)}\n')
     for label, counter in (
         ('categories', Counter(c for r in kept for c in (r['categories'].split('|') if r['categories'] else ['(none)']))),
-        ('date precision', Counter({11: 'day', 10: 'month', 9: 'year'}[r['date_precision']] for r in kept)),
+        ('date precision', Counter(PRECISION[r['date_precision']] for r in kept)),
         ('location', Counter(r['where'] for r in kept)),
     ):
         print(f'{label}: ' + ', '.join(f'{k} {v:,}' for k, v in counter.most_common()))
