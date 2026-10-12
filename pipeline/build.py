@@ -1,8 +1,15 @@
 """Step 3: turn data/events.tsv into data/events.json, the compact file the map loads."""
 import csv
 import json
+import re
 
 import config as C
+
+
+def display_name(enwiki_title):
+    """The English Wikipedia title, so the name matches the article it links to, without a trailing
+    disambiguator: "Eastern Front (World War II)" -> "Eastern Front"."""
+    return re.sub(r' \([^()]*\)$', '', enwiki_title)
 
 
 def main():
@@ -12,7 +19,7 @@ def main():
     for r in rows:
         e = {
             'id': r['qid'],
-            'name': r['label'],
+            'name': display_name(r['enwiki']),
             'desc': r['description'],
             'wiki': r['enwiki'],
             'langs': int(r['langs']),

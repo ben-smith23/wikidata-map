@@ -32,6 +32,8 @@ ERAS = [1500, 1800, 1900, 1950, 2000, 2015]  # boundaries: before 1500, 1500-179
 # --- Dates ----------------------------------------------------------------------------
 # Coarsest date we accept. Wikidata precision: 11=day, 10=month, 9=year, 8=decade, 7=century.
 MIN_DATE_PRECISION = 9
+# Earliest year kept (negative = BC).
+EARLIEST_YEAR = -1500
 
 # --- Categories -----------------------------------------------------------------------
 # An event is in a category if any of its types is a subclass of one of these Wikidata classes.

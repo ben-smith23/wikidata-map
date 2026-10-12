@@ -169,6 +169,7 @@ def late_reason(start, pts):
     return first_failed([
         (not start or start[1] < C.MIN_DATE_PRECISION, 'date vaguer than a year, or unknown'),
         (start and is_future(*start), 'in the future'),
+        (start and year(start[0]) < C.EARLIEST_YEAR, f'before {-C.EARLIEST_YEAR} BC'),
         (not pts, 'no usable Earth coordinate'),
     ])
 
