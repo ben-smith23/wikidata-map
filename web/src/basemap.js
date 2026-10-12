@@ -26,14 +26,14 @@ function split(fc, lo, hi) {
 
 /** Loads the vector layers; the relief image loads in the background and calls onRelief when ready. */
 export async function loadBasemap(onRelief) {
-  const get = (name) => fetch(`/basemap/${name}`).then((r) => r.json());
+  const get = (name) => fetch(`basemap/${name}`).then((r) => r.json());
   const [rivers, lakes, states, reliefMeta] = await Promise.all([get('rivers.json'), get('lakes.json'), get('states.json'), get('relief.json')]);
   geo.lakes = lakes;
   geo.states = states;
   RIVER_TIERS.forEach(([lo, hi], i) => { geo[`rivers${i}`] = split(rivers, lo, hi); });
   const image = new Image();
   image.onload = () => { relief = { image, ...reliefMeta }; onRelief(); };
-  image.src = '/basemap/relief.webp';
+  image.src = 'basemap/relief.webp';
 }
 
 export function projectBasemap(projection) {

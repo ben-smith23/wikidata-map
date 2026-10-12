@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / 'data' / 'raw'                  # fetch.py writes here
 EVENTS_TSV = ROOT / 'data' / 'events.tsv'    # filter_events.py writes the kept events here
-EVENTS_JSON = ROOT / 'data' / 'events.json'  # build.py writes the file the map loads here
+EVENTS_JSON = ROOT / 'web' / 'public' / 'events.json'  # the file the map loads; committed, so the site can be built anywhere
 
 # --- Fame ---------------------------------------------------------------------------
 # Minimum number of Wikipedia language editions with an article, per category. An event uses the

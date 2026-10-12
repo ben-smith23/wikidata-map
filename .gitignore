@@ -3,4 +3,3 @@ __pycache__/
 .idea/
 web/node_modules/
 web/dist/
-web/public/events.json

@@ -3,9 +3,12 @@
 // straight scale from 3500 BC would squeeze them into the last few percent of the bar.
 
 const BREAKS = [[-1500, 0], [0, 0.1], [1000, 0.22], [1500, 0.34], [1800, 0.5], [1900, 0.66], [2000, 0.9], [2030, 1]];
-const TICKS = [-1500, -1000, -500, 0, 500, 1000, 1500, 1700, 1800, 1900, 1950, 2000];
+const TICKS = [-1000, 0, 500, 1000, 1500, 1700, 1800, 1900, 1950, 2000];
 const BINS = 240;
-const HANDLE_GRAB = 7; // px either side of an edge that grabs it
+const HANDLE_GRAB = 7;        // px either side of an edge that grabs it
+const SWEEP_SECONDS = 120;    // time for play mode to cross the whole timeline at 1x
+const DEFAULT_PLAY_SPAN = 0.03; // window width (fraction of the bar) when play starts from "all years"
+const SPEEDS = [0.5, 1, 2, 4];
 
 function interpolate(v, from, to) {
   for (let i = 1; i < BREAKS.length; i++) {
@@ -17,7 +20,7 @@ function interpolate(v, from, to) {
   }
   return BREAKS.at(-1)[to];
 }
-const yearToT = (y) => interpolate(y, 0, 1);
+export const yearToT = (y) => interpolate(y, 0, 1);
 const tToYear = (t) => Math.round(interpolate(t, 1, 0));
 
 export function formatYear(y) {
@@ -26,13 +29,22 @@ export function formatYear(y) {
 
 /**
  * spans: [[startYear, endYear]] per event. onChange(lo, hi) is called whenever the range changes.
- * Returns { range } with the current [lo, hi].
+ * Play mode sweeps the window forward; while playing, `playhead` is the window's leading edge in scale
+ * space (0..1, continuous) and `tPerSecond` its speed, so callers can animate events as they arrive.
  */
 export function createTimeline(container, spans, onChange, initial = null) {
   const canvas = document.createElement('canvas');
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const playButton = document.createElement('button');
+  playButton.type = 'button';
+  playButton.textContent = '▶ Play';
+  const speedButton = document.createElement('button');
+  speedButton.type = 'button';
   const readout = document.createElement('div');
   readout.className = 'readout';
-  container.append(readout, canvas);
+  bar.append(playButton, speedButton, readout);
+  container.append(bar, canvas);
   const ctx = canvas.getContext('2d');
   const full = [Math.min(...spans.map((s) => s[0])), new Date().getFullYear()];
   let range = initial ? [Math.max(full[0], initial[0]), Math.min(full[1], initial[1])] : [...full];
@@ -93,11 +105,52 @@ export function createTimeline(container, spans, onChange, initial = null) {
       ctx.fillRect(x, barBottom + 1, 1, 3);
       ctx.fillText(formatYear(y), x, barBottom + 5);
     }
-    readout.textContent = `${formatYear(range[0])} – ${formatYear(range[1])} · ${visibleCount().toLocaleString()} of ${spans.length.toLocaleString()} events`;
+    const years = range[0] === range[1] ? formatYear(range[0]) : `${formatYear(range[0])} – ${formatYear(range[1])}`;
+    readout.textContent = `${years} · ${visibleCount().toLocaleString()} of ${spans.length.toLocaleString()} events`;
     readout.style.color = text;
   }
 
-  function set(lo, hi) {
+  // play mode works in scale space (t), so the sweep moves at an even pace across the stretched scale
+  let playing = false, playLo = 0, playHi = 0, last = 0, speed = 1;
+  speedButton.textContent = `${speed}×`;
+
+  function step(now) {
+    if (!playing) return;
+    const dt = (now - last) / 1000;
+    last = now;
+    const span = playHi - playLo;
+    playHi = Math.min(1, playHi + dt * speed / SWEEP_SECONDS);
+    playLo = playHi - span;
+    set(tToYear(playLo), tToYear(playHi), true);
+    if (playHi >= 1) stop(); else requestAnimationFrame(step);
+  }
+
+  function play() {
+    let lo = yearToT(range[0]), hi = yearToT(range[1]);
+    if (range[0] === full[0] && range[1] === full[1]) { lo = 0; hi = DEFAULT_PLAY_SPAN; }  // all years: start narrow
+    if (hi >= 0.999) { hi -= lo; lo = 0; }                                                // at the end: start over
+    [playLo, playHi] = [lo, hi];
+    playing = true;
+    playButton.textContent = '❚❚ Pause';
+    last = performance.now();
+    set(tToYear(playLo), tToYear(playHi), true);
+    requestAnimationFrame(step);
+  }
+
+  function stop() {
+    playing = false;
+    playButton.textContent = '▶ Play';
+    onChange(range[0], range[1]);
+  }
+
+  playButton.addEventListener('click', () => (playing ? stop() : play()));
+  speedButton.addEventListener('click', () => {
+    speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
+    speedButton.textContent = `${speed}×`;
+  });
+
+  function set(lo, hi, fromPlay = false) {
+    if (!fromPlay && playing) stop();
     lo = Math.max(full[0], Math.min(lo, full[1]));
     hi = Math.max(full[0], Math.min(hi, full[1]));
     if (lo > hi) [lo, hi] = [hi, lo];
@@ -139,5 +192,12 @@ export function createTimeline(container, spans, onChange, initial = null) {
   window.addEventListener('resize', draw);
 
   draw();
-  return { get range() { return range; }, get full() { return full; }, redraw: draw };
+  return {
+    get range() { return range; },
+    get full() { return full; },
+    get playing() { return playing; },
+    get playhead() { return playHi; },
+    get tPerSecond() { return speed / SWEEP_SECONDS; },
+    redraw: draw,
+  };
 }

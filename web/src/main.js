@@ -4,10 +4,10 @@ import { select } from 'd3-selection';
 import { zoom, zoomIdentity } from 'd3-zoom';
 import { drawBasemap, loadBasemap, projectBasemap } from './basemap.js';
 import { createDots } from './dots.js';
-import { dateRange } from './format.js';
+import { hideCard, showCard } from './card.js';
 import { drawLabels, loadLabels, projectLabels } from './labels.js';
 import { CATEGORIES, OTHER, THEMES, category } from './theme.js';
-import { createTimeline } from './timeline.js';
+import { createTimeline, yearToT } from './timeline.js';
 
 const PRECISE = new Set(['own', 'site']); // everything else is a region, country or continent
 const DOT_RADIUS = 1.6;                   // CSS pixels for a 5-language event, at any zoom
@@ -15,6 +15,7 @@ const SHOW_LABELS = true;
 // During a gesture the basemap and labels are moved with CSS transforms (done by the GPU compositor)
 // and redrawn properly when it ends; on long drags they are also redrawn this often.
 const GESTURE_REFRESH_MS = 400;
+const ARRIVAL_SECONDS = 1.2; // play mode: how long an event's arrival animation lasts
 const MAX_ZOOM = 400; // about street-district scale; the coastline data gets coarse beyond ~50x
 
 const stage = document.getElementById('stage');
@@ -23,7 +24,6 @@ const labelCanvas = document.getElementById('labels');
 const base = baseCanvas.getContext('2d');
 const labelCtx = labelCanvas.getContext('2d');
 const dots = createDots(document.getElementById('dots'));
-const tooltip = document.getElementById('tooltip');
 const projection = geoEqualEarth();
 
 let events = [];
@@ -35,6 +35,7 @@ let renderedAt = 0;
 let gesturing = false;
 let frame = 0;
 let years = [-1e9, 1e9]; // visible year range, set by the timeline
+let timeline = null;
 
 /** "-0490-01-01" -> -490 */
 function yearOf(iso) {
@@ -71,7 +72,7 @@ function projectEvents() {
     const [y0, y1] = spanOf(e);
     for (const [lon, lat, kind] of e.pts) {
       const xy = projection([lon, lat]);
-      if (xy) list.push({ x: xy[0], y: xy[1], r, color, precise: PRECISE.has(kind), y0, y1, event: e });
+      if (xy) list.push({ x: xy[0], y: xy[1], r, color, precise: PRECISE.has(kind), y0, y1, t: yearToT(y0), event: e });
     }
   }
   // approximate locations first, then precise ones; bigger (more famous) dots on top
@@ -119,7 +120,9 @@ function moveStatic() {
 function render() {
   if (!gesturing || performance.now() - renderedAt > GESTURE_REFRESH_MS) drawStatic();
   else moveStatic();
-  dots.draw(transform, THEMES[theme].dots, years);
+  const play = timeline?.playing ? { now: timeline.playhead, flash: timeline.tPerSecond * ARRIVAL_SECONDS } : null;
+  dots.draw(transform, THEMES[theme].dots, years, play);
+  if (play) requestDraw(); // keep animating arrivals while playing
 }
 
 function requestDraw() {
@@ -143,26 +146,6 @@ function pointAt(clientX, clientY) {
   return best;
 }
 
-function showTooltip(p, clientX, clientY) {
-  if (!p) { tooltip.hidden = true; return; }
-  const e = p.event;
-  const [, label] = category(e);
-  tooltip.innerHTML = '';
-  const name = document.createElement('div');
-  name.className = 'name';
-  name.textContent = e.name;
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  meta.textContent = `${dateRange(e)} · ${label}`;
-  const desc = document.createElement('div');
-  desc.textContent = e.desc;
-  tooltip.append(name, meta, desc);
-  tooltip.hidden = false;
-  const pad = 14;
-  tooltip.style.left = `${Math.min(clientX + pad, window.innerWidth - tooltip.offsetWidth - pad)}px`;
-  tooltip.style.top = `${Math.min(clientY + pad, window.innerHeight - tooltip.offsetHeight - pad)}px`;
-}
-
 function legend() {
   const ul = document.getElementById('legend');
   for (const [, label, color] of [...CATEGORIES, OTHER]) {
@@ -170,9 +153,6 @@ function legend() {
     li.innerHTML = `<span class="swatch" style="background:${color}"></span>${label}`;
     ul.append(li);
   }
-  const li = document.createElement('li');
-  li.innerHTML = `<span class="swatch soft" style="background:${OTHER[2]}"></span>Approximate location`;
-  ul.append(li);
 }
 
 async function main() {
@@ -181,7 +161,7 @@ async function main() {
   requestDraw();
 
   const [eventData] = await Promise.all([
-    fetch('/events.json').then((r) => r.json()),
+    fetch('events.json').then((r) => r.json()),
     loadBasemap(() => { drawStatic(); }),
     loadLabels(),
   ]);
@@ -192,10 +172,11 @@ async function main() {
   // the year range lives in the URL too (?years=1789,1815)
   const params = new URLSearchParams(location.search);
   const initial = params.get('years')?.split(',').map(Number);
-  const timeline = createTimeline(document.getElementById('timeline'), events.map(spanOf), (lo, hi) => {
+  timeline = createTimeline(document.getElementById('timeline'), events.map(spanOf), (lo, hi) => {
     years = [lo, hi];
-    tooltip.hidden = true;
+    hideCard();
     requestDraw();
+    if (timeline?.playing) return; // the URL is updated when playback stops
     const q = new URLSearchParams(location.search);
     if (lo === timeline.full[0] && hi === timeline.full[1]) q.delete('years'); else q.set('years', `${lo},${hi}`);
     history.replaceState(null, '', `${q.size ? '?' + q : location.pathname}${location.hash}`);
@@ -206,7 +187,7 @@ async function main() {
   const zoomer = zoom()
     .scaleExtent([1, MAX_ZOOM])
     .on('start', () => { gesturing = true; })
-    .on('zoom', (ev) => { transform = ev.transform; tooltip.hidden = true; requestDraw(); })
+    .on('zoom', (ev) => { transform = ev.transform; hideCard(); requestDraw(); })
     .on('end', () => {
       gesturing = false;
       requestDraw();
@@ -224,8 +205,8 @@ async function main() {
   const [k, lon, lat] = location.hash.slice(1).split('/').map(Number);
   if (k && Number.isFinite(lon) && Number.isFinite(lat)) setView(k, [lon, lat]);
 
-  stage.addEventListener('mousemove', (ev) => showTooltip(pointAt(ev.clientX, ev.clientY), ev.clientX, ev.clientY));
-  stage.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+  stage.addEventListener('mousemove', (ev) => showCard(pointAt(ev.clientX, ev.clientY)?.event, ev.clientX, ev.clientY));
+  stage.addEventListener('mouseleave', hideCard);
   stage.addEventListener('click', (ev) => {
     const p = pointAt(ev.clientX, ev.clientY);
     if (p) window.open(`https://en.wikipedia.org/wiki/${encodeURIComponent(p.event.wiki.replaceAll(' ', '_'))}`, '_blank', 'noopener');

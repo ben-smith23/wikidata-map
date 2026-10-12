@@ -27,7 +27,7 @@ const STYLE = {
 const PRIORITY = { ocean: 0, country: 1, sea: 2, region: 3, city: 4 };
 
 export async function loadLabels() {
-  labels = (await fetch('/basemap/labels.json').then((r) => r.json())).map((l) => ({
+  labels = (await fetch('basemap/labels.json').then((r) => r.json())).map((l) => ({
     ...l, minZoom: minZoom(l.kind, l.rank), text: STYLE[l.kind].upper ? l.name.toUpperCase() : l.name,
   }));
   labels.sort((a, b) => PRIORITY[a.kind] - PRIORITY[b.kind] || a.rank - b.rank);

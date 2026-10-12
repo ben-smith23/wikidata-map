@@ -1,4 +1,4 @@
-"""Step 3: turn data/events.tsv into data/events.json, the compact file the map loads."""
+"""Step 3: turn data/events.tsv into web/public/events.json, the compact file the map loads."""
 import csv
 import json
 import re

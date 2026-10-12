@@ -9,13 +9,13 @@ pipeline/
   config.py         every rule that decides what's on the map; edit this
   fetch.py          step 1: download candidates from Wikidata (via QLever) into data/raw/
   filter_events.py  step 2: apply the rules and write data/events.tsv
-  build.py          step 3: write data/events.json, the file the map loads
+  build.py          step 3: write web/public/events.json, the file the map loads
   locations.py      turns coordinates into map points with a precision label
   sparql.py         small client for the QLever endpoint
 data/               generated, not in git
   raw/              cached API results (~45 MB)
   events.tsv        the kept events, one per row; easy to inspect
-  events.json       compact version for the map
+web/                the map (Vite); web/public/events.json is committed so the site builds anywhere
 ```
 
 ## Running it
@@ -29,6 +29,8 @@ python3 pipeline/build.py
 ```
 
 To change the rules, edit `pipeline/config.py` and re-run the last two steps; no API calls are needed. Running `fetch.py` again picks up new events; `--refresh` re-downloads everything, which is rarely needed.
+
+The map is in `web/`: `npm install`, then `npm run dev` for a local server. Every push to `history-map` builds it and publishes it to GitHub Pages (`.github/workflows/pages.yml`).
 
 ## What counts as an event
 
