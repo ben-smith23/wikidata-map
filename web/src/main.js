@@ -166,7 +166,6 @@ async function main() {
     loadLabels(),
   ]);
   events = eventData;
-  document.getElementById('count').textContent = `${events.length.toLocaleString()} events`;
   resize();
   requestDraw();
   // the year range lives in the URL too (?years=1789,1815)

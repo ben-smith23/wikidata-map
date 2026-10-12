@@ -16,7 +16,7 @@ let anchor = [0, 0];
 function summary(title) {
   if (!summaries.has(title)) {
     summaries.set(title, fetch(SUMMARY_API + encodeURIComponent(title.replaceAll(' ', '_')), {
-      headers: { 'Api-User-Agent': 'history-map/0.1 (https://github.com/ben-smith23/wikidata-map)' },
+      headers: { 'Api-User-Agent': 'wikidata-map/0.1 (https://github.com/ben-smith23/wikidata-map)' },
     })
       .then((r) => (r.ok ? r.json() : {}))
       .then((s) => ({ extract: s.extract || '', image: s.thumbnail?.source || null }))

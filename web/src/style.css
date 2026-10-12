@@ -59,7 +59,6 @@ header {
 
 h1 { margin: 0; font-size: 16px; font-weight: 600; }
 
-#count { color: var(--muted); }
 
 button {
   font: inherit;

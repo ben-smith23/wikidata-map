@@ -1,4 +1,4 @@
-# History Map
+# Wikidata Map
 
 A map of historical events from [Wikidata](https://www.wikidata.org): battles, disasters, treaties, revolutions, attacks and more. Every event has a date and a location.
 
