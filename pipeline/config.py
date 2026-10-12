@@ -99,6 +99,7 @@ NOT_EVENTS = [
     dict(reason='sub-topic or aggregate, not an event', even_if_historical=True, title='|'.join([
         r'^(\d{4}(–\d{2,4})? )?COVID-19 pandemic (in|on) ',  # "COVID-19 pandemic in Oregon"
         r'^history of ',                                   # "history of Melbourne"
+        r'^list of ',                                      # "List of wars involving Saudi Arabia"
         r'^(premiership|presidency|chancellorship) of ',   # "premiership of Boris Johnson"
         r' (cyclone|hurricane|typhoon|tornado) season$',   # "2019–20 Australian region cyclone season"
     ])),
@@ -152,6 +153,50 @@ NOT_EVENTS = [
     }),
 ]
 
+# A year in the English Wikipedia title wins over a date it disagrees with ("2013 Cypriot presidential
+# election" dated 2008). Only a leading year or decade, a bracketed year or range, or a trailing "of 1770"
+# count, so flight numbers don't. Titles matching this are skipped: they name a later event.
+TITLE_YEAR_EXCEPTIONS = r'qualification|\bbid\b'
+
+# Events that span more than this many years and have no category are eras, legal codes, awards and the
+# like (the Roman calendar, the Great Qing Legal Code, Sakoku), not events.
+MAX_UNCATEGORISED_SPAN = 100
+
+# --- Corrections -----------------------------------------------------------------------
+# Errors in Wikidata found by auditing the list: own coordinates far from the places an event names, years
+# in titles that disagree with the date. Each entry replaces the event's point, start or end; a date is
+# (ISO date, precision: 11 day, 10 month, 9 year). drop=True removes an event whose fix isn't certain.
+CORRECTIONS = {
+    # wrong coordinates (sign flips, typos, a namesake place)
+    'Q126876': dict(point=(-73.41667, 43.66667)),            # Saratoga campaign: longitude sign flipped (was Kazakhstan)
+    'Q3555607': dict(point=(48.5158, 34.7961)),              # Battle of Ecbatana: latitude typo (was the Indian Ocean)
+    'Q20820893': dict(point=(48.85, 38.75)),                 # Siege of Lankaran: was central Russia
+    'Q2124166': dict(point=(46.7167, 43.85)),                # 2010 Kizlyar bombings: latitude typo
+    'Q12756567': dict(point=(20.45, 44.82)),                 # Siege of Belgrade (1440): was Italy
+    'Q2888872': dict(point=(112.19, 30.35)),                 # Battle of Jiangling (208): was Jiangsu
+    'Q2386936': dict(point=(-76.89, 18.37)),                 # Tacky's Revolt: Jamaica, was French Guiana
+    'Q5432166': dict(point=(35.84, 34.44)),                  # Fall of Tripoli (1289): Lebanon, not Libya
+    'Q1308854': dict(point=(-99.13, 19.43)),                 # La Noche Triste: Tenochtitlan, was Sonora
+    'Q109837841': dict(point=(-83.26, 42.84)),               # 2021 Oxford High School shooting: Michigan, was Colorado
+    'Q12857637': dict(point=(4.38, 50.84)),                  # 40th G7 summit: held in Brussels, not Sochi
+    'Q615020': dict(point=(8.52, 12.0)),                     # EAS Airlines Flight 4226: crashed in Kano, not Lagos
+    'Q24262455': dict(point=(12.24, 51.83)),                 # Murder of Yangjie Li: Dessau, was Iowa City
+    'Q961673': dict(point=(2.12, 48.80)),                    # Treaty of Versailles (1768): was Versailles, Kentucky
+    'Q2602266': dict(point=(-0.235, 51.35)),                 # Treaty of Nonsuch: Nonsuch Palace, was Florida
+    'Q2422375': dict(point=(-4.0, 40.0), kind='large_region'),  # Roman conquest of the Iberian Peninsula: was Italy
+    'Q3636516': dict(point=(42.54, 39.14)),                  # Siege of Manzikert (1054): Malazgirt, was central Anatolia
+    'Q593024': dict(point=(5.41, 36.19)),                    # Sétif and Guelma massacre: Sétif, was the Sahara
+    # wrong dates
+    'Q1633080': dict(end=('2007-12-15', 11)),                # 2007 UN Climate Change Conference: end was 2017
+    'Q856650': dict(date=('1990-08-02', 11)),                # Iraqi invasion of Kuwait: was 2009
+    'Q714820': dict(date=('1877-01-29', 11)),                # Satsuma Rebellion: was 2005
+    'Q111123805': dict(date=('2022-03-05', 11), point=(-100.446, 20.577)),  # Querétaro–Atlas riot: was 40 AD in Barcelona
+    'Q68750': dict(date=('1810-09-16', 11), point=(-102.0, 23.0), kind='country'),  # Mexican War of Independence: was 1800 in Canada
+    # wrong, and the right place isn't certain
+    'Q1355254': dict(drop=True),                             # Battle of Poimanenon: placed in Syria
+    'Q4871427': dict(drop=True),                             # Battle of Khresili: in Georgia, placed in Ukraine
+}
+
 # --- Locations ------------------------------------------------------------------------
 # An event's points come from ONE source: its own coordinate (P625) if it has one, otherwise
 # whichever of these properties gives the most precise point (ties go to the one listed first).
@@ -164,6 +209,11 @@ LOCATION_FALLBACK = 'P17'  # country; set to None to leave country-only events o
 REGION_MIN_AREA = 1_000        # km²; smaller than this is a site
 LARGE_REGION_MIN_AREA = 50_000
 REGION_MAX_COUNTRIES = 2       # a region spanning 0 or more countries than this is a large region
+
+# Locations that are never used: a vehicle's coordinates are where it is now (a museum ship, a wreck),
+# not where the event happened, e.g. the USS Iowa turret explosion would be placed in Los Angeles.
+IGNORED_LOCATION_CLASSES = {'Q42889'}  # vehicle
+
 
 LOCATION_CLASSES = {
     'country': ['Q3024240'],

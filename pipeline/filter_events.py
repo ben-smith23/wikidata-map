@@ -103,6 +103,58 @@ def pick_date(statements, latest=False):
     return max(statements, key=lambda s: (s[1], year(s[0]) if latest else -year(s[0])))
 
 
+def pick_start(statements):
+    """The earliest year among the start statements, at its most precise. A more precise date from a later
+    year doesn't win: for wars "point in time" is often the end (the Third Crusade is 1189, not 9 Sep 1192)."""
+    usable = [s for s in statements if s[1] >= C.MIN_DATE_PRECISION]
+    if not usable:
+        return pick_date(statements)
+    first = min(year(s[0]) for s in usable)
+    return pick_date([s for s in usable if year(s[0]) == first])
+
+
+TITLE_YEARS = [
+    re.compile(r'^(\d{4})(s)?(?:\s?[–-]\s?(\d{2,4}))?\s'),    # "2013 …", "1990s …", "1629–1631 …"
+    re.compile(r'\((\d{3,4})(s)?(?:\s?[–-]\s?(\d{2,4}))?\)$'),  # "… (1440)", "… (1609–1618)"
+    re.compile(r'\bof (\d{4})(s)?()$'),                          # "… of 1770"
+]
+
+
+def title_years(title):
+    """(first, last) year named in the title, or None."""
+    if re.search(C.TITLE_YEAR_EXCEPTIONS, title, re.I):
+        return None
+    for pattern in TITLE_YEARS:
+        m = pattern.search(title)
+        if m:
+            first = int(m.group(1))
+            last = first + 9 if m.group(2) else first
+            if m.group(3):  # "2014–16" -> 2016
+                last = int(str(first)[:4 - len(m.group(3))] + m.group(3))
+            if first > TODAY.year:  # "8888 Uprising"
+                return None
+            return (first, min(TODAY.year, max(first, last)))  # "2020s" ends this year
+    return None
+
+
+def match_title(title, statements, start, end):
+    """Start and end, moved to the title's year if the dates disagree with it (see C.TITLE_YEAR_EXCEPTIONS)."""
+    span = title_years(title)
+    if not span or not start:
+        return start, end
+    first, last = span
+    s, e = year(start[0]), year((end or start)[0])
+    if first == last and first - 1 <= e and s <= last + 1:
+        return start, end  # a single year that the event's dates overlap ("Great Bengal famine of 1770")
+    if first < last and abs(s - first) <= 1:
+        return start, end  # a range the event starts at
+    in_title = [st for st in statements if first <= year(st[0]) <= first + 1 and st[1] >= C.MIN_DATE_PRECISION]
+    start = pick_date(in_title) if in_title else (f'{first:04d}-01-01T00:00:00Z', 9)
+    if not end or not first <= year(end[0]) <= last + 1:
+        end = (f'{last:04d}-01-01T00:00:00Z', 9) if last > first else None
+    return start, end
+
+
 def is_future(t, precision):
     y, m, d = (int(x) for x in DATE.match(t).groups())
     if y != TODAY.year:
@@ -164,13 +216,16 @@ def early_reason(q, e):
     return next((rule['reason'] for rule in NOT_EVENTS if is_not_event(rule, q, e)), None)
 
 
-def late_reason(start, pts):
+def late_reason(start, end, pts, cats):
     """Why an event that passed the early rules is dropped based on its dates and locations, or None."""
+    span = year(end[0]) - year(start[0]) if start and end else 0
     return first_failed([
         (not start or start[1] < C.MIN_DATE_PRECISION, 'date vaguer than a year, or unknown'),
         (start and is_future(*start), 'in the future'),
         (start and year(start[0]) < C.EARLIEST_YEAR, f'before {-C.EARLIEST_YEAR} BC'),
         (not pts, 'no usable Earth coordinate'),
+        (not cats and span > C.MAX_UNCATEGORISED_SPAN,
+         f'uncategorised and spans over {C.MAX_UNCATEGORISED_SPAN} years (eras, legal codes, awards...)'),
     ])
 
 
@@ -202,10 +257,19 @@ def main():
             not_downloaded += 1
             continue
         if not reason:
-            start = pick_date(e['dates']['P585'] + e['dates']['P580'])
+            starts = e['dates']['P585'] + e['dates']['P580']
+            start = pick_start(starts)
             end = pick_date(e['dates']['P582'], latest=True)
+            start, end = match_title(e['enwiki'], starts, start, end)
             source, pts = points_for(e['own'], e['borrowed'])
-            reason = late_reason(start, pts)
+            fix = C.CORRECTIONS.get(q, {})
+            if 'point' in fix:
+                source, pts = 'correction', {fix['point']: fix.get('kind', 'own')}
+            if 'date' in fix:
+                start = (fix['date'][0] + 'T00:00:00Z', fix['date'][1])
+            if 'end' in fix:
+                end = (fix['end'][0] + 'T00:00:00Z', fix['end'][1]) if fix['end'] else None
+            reason = 'wrong in Wikidata (CORRECTIONS)' if fix.get('drop') else late_reason(start, end, pts, e['categories'])
         if reason:
             removed[reason] += 1
             continue

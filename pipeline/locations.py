@@ -42,6 +42,8 @@ def parse_point(coord):
 def _borrowed_points(locations):
     pts = {}
     for loc in locations.values():
+        if loc['classes'] & C.IGNORED_LOCATION_CLASSES:
+            continue
         kind = location_kind(loc)
         for p in filter(None, map(parse_point, loc['coords'])):
             # if two locations share a point, keep the more precise kind
