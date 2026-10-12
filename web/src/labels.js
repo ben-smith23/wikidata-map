@@ -5,10 +5,11 @@ import { SANS, SERIF } from './theme.js';
 
 let labels = []; // {name, kind, lon, lat, rank, x, y, minZoom, priority}
 
-// Zoom level at which a label of a given kind and Natural Earth rank first appears.
+// Zoom level at which a label of a given kind and Natural Earth rank first appears. Zoom here is relative
+// to the world filling a desktop screen, so on a phone (a much smaller world) labels wait for more zoom.
 function minZoom(kind, rank) {
   switch (kind) {
-    case 'ocean': return 0;
+    case 'ocean': return 0.5;
     case 'sea': return rank <= 2 ? 1.5 : rank <= 4 ? 3 : 6;
     case 'region': return rank <= 2 ? 1.8 : rank <= 4 ? 3.5 : 7;
     case 'country': return rank <= 2 ? 1.2 : rank <= 4 ? 2.2 : rank <= 6 ? 4 : 7;
@@ -37,14 +38,15 @@ export function projectLabels(projection) {
   for (const l of labels) [l.x, l.y] = projection([l.lon, l.lat]) ?? [NaN, NaN];
 }
 
-export function drawLabels(ctx, transform, t, width, height) {
+/** screenScale: how big the world is on screen compared with a desktop screen (1 = desktop, ~0.3 = phone). */
+export function drawLabels(ctx, transform, t, width, height, screenScale = 1) {
   const placed = [];
   const overlaps = (b) => placed.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   for (const l of labels) {
-    if (transform.k < l.minZoom || Number.isNaN(l.x)) continue;
+    if (transform.k * screenScale < l.minZoom || Number.isNaN(l.x)) continue;
     const [x, y] = transform.apply([l.x, l.y]);
     if (x < -100 || x > width + 100 || y < -20 || y > height + 20) continue;
     const style = STYLE[l.kind];

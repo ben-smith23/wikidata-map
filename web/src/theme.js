@@ -4,7 +4,6 @@ export const CATEGORIES = [
   ['attack', 'Attack', '#c33c8a'],
   ['disaster', 'Disaster', '#f3a712'],
   ['politics', 'Politics', '#3a86ff'],
-  ['election', 'Election', '#8e6cf0'],
   ['sport', 'Sport', '#2ec4b6'],
   ['entertainment', 'Entertainment', '#ff8fab'],
 ];
@@ -36,6 +35,10 @@ export const THEMES = {
   },
 };
 
+// Elections are shown as politics. The pipeline still keeps them separate, for their stricter language cut.
+const SHOWN_AS = { election: 'politics' };
+
 export function category(e) {
-  return CATEGORIES.find(([key]) => e.cats.includes(key)) ?? OTHER;
+  const cats = e.cats.map((c) => SHOWN_AS[c] ?? c);
+  return CATEGORIES.find(([key]) => cats.includes(key)) ?? OTHER;
 }

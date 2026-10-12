@@ -147,3 +147,46 @@ button {
   height: 58px;
   touch-action: none;
 }
+
+/* touch: the card is a panel along the bottom, above the timeline, with a link to Wikipedia */
+#tooltip.sheet {
+  pointer-events: auto;
+  left: 12px;
+  right: 12px;
+  bottom: calc(112px + env(safe-area-inset-bottom));
+  width: auto;
+  max-width: 480px;
+  margin: 0 auto;
+}
+#tooltip.sheet img { max-height: 120px; }
+#tooltip a {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+/* phones: smaller panels, the legend as a row under the title */
+@media (max-width: 640px) {
+  header { top: 8px; left: 8px; padding: 6px 10px; }
+  h1 { font-size: 15px; }
+  #legend {
+    top: 52px;
+    bottom: auto;
+    left: 8px;
+    right: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    padding: 5px 10px;
+    font-size: 12px;
+    width: fit-content;
+  }
+  #legend li { gap: 5px; }
+  #legend .swatch { width: 8px; height: 8px; }
+  #timeline { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); }
+  #timeline .bar { padding: 0 10px; }
+  #timeline .readout .total { display: none; }
+  #tooltip.sheet { left: 8px; right: 8px; bottom: calc(106px + env(safe-area-inset-bottom)); }
+}

@@ -3,9 +3,10 @@
 // straight scale from 3500 BC would squeeze them into the last few percent of the bar.
 
 const BREAKS = [[-1500, 0], [0, 0.1], [1000, 0.22], [1500, 0.34], [1800, 0.5], [1900, 0.66], [2000, 0.9], [2030, 1]];
-const TICKS = [-1000, 0, 500, 1000, 1500, 1700, 1800, 1900, 1950, 2000];
+const TICKS = [0, 1000, 1500, 1800, 1900, 2000, -1000, 500, 1700, 1950]; // most important first
+const TICK_GAP = 36;          // px; on narrow screens the less important ticks are dropped
 const BINS = 240;
-const HANDLE_GRAB = 7;        // px either side of an edge that grabs it
+const HANDLE_GRAB = { mouse: 7, touch: 18 }; // px either side of an edge that grabs it
 const SWEEP_SECONDS = 120;    // time for play mode to cross the whole timeline at 1x
 const DEFAULT_PLAY_SPAN = 0.03; // window width (fraction of the bar) when play starts from "all years"
 const SPEEDS = [0.5, 1, 2, 4];
@@ -43,6 +44,8 @@ export function createTimeline(container, spans, onChange, initial = null) {
   speedButton.type = 'button';
   const readout = document.createElement('div');
   readout.className = 'readout';
+  const total = document.createElement('span');
+  total.className = 'total'; // " of 20,016", hidden on narrow screens
   bar.append(playButton, speedButton, readout);
   container.append(bar, canvas);
   const ctx = canvas.getContext('2d');
@@ -100,13 +103,17 @@ export function createTimeline(container, spans, onChange, initial = null) {
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
+    const drawn = [];
     for (const y of TICKS) {
       const x = xOf(y);
+      if (drawn.some((d) => Math.abs(d - x) < TICK_GAP)) continue;
+      drawn.push(x);
       ctx.fillRect(x, barBottom + 1, 1, 3);
       ctx.fillText(formatYear(y), x, barBottom + 5);
     }
     const years = range[0] === range[1] ? formatYear(range[0]) : `${formatYear(range[0])} – ${formatYear(range[1])}`;
-    readout.textContent = `${years} · ${visibleCount().toLocaleString()} of ${spans.length.toLocaleString()} events`;
+    total.textContent = ` of ${spans.length.toLocaleString()}`;
+    readout.replaceChildren(`${years} · ${visibleCount().toLocaleString()}`, total, ' events');
     readout.style.color = text;
   }
 
@@ -165,8 +172,10 @@ export function createTimeline(container, spans, onChange, initial = null) {
   let drag = null;
   canvas.addEventListener('pointerdown', (ev) => {
     const x = ev.offsetX, x0 = xOf(range[0]), x1 = xOf(range[1]);
-    if (Math.abs(x - x0) <= HANDLE_GRAB) drag = { mode: 'lo' };
-    else if (Math.abs(x - x1) <= HANDLE_GRAB) drag = { mode: 'hi' };
+    const grab = HANDLE_GRAB[ev.pointerType] ?? HANDLE_GRAB.mouse;
+    // when the window is narrow, grab the nearer edge
+    if (Math.abs(x - x0) <= grab && Math.abs(x - x0) <= Math.abs(x - x1)) drag = { mode: 'lo' };
+    else if (Math.abs(x - x1) <= grab) drag = { mode: 'hi' };
     else if (x > x0 && x < x1) drag = { mode: 'move', start: x, t0: yearToT(range[0]), t1: yearToT(range[1]) };
     else { drag = { mode: 'new', start: x }; set(yearAt(x), yearAt(x)); }
     canvas.setPointerCapture(ev.pointerId);
@@ -174,7 +183,7 @@ export function createTimeline(container, spans, onChange, initial = null) {
   canvas.addEventListener('pointermove', (ev) => {
     const x = ev.offsetX;
     if (!drag) {
-      const near = [range[0], range[1]].some((y) => Math.abs(x - xOf(y)) <= HANDLE_GRAB);
+      const near = [range[0], range[1]].some((y) => Math.abs(x - xOf(y)) <= HANDLE_GRAB.mouse);
       canvas.style.cursor = near ? 'ew-resize' : x > xOf(range[0]) && x < xOf(range[1]) ? 'grab' : 'crosshair';
       return;
     }

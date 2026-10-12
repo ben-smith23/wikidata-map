@@ -82,9 +82,10 @@ void main() {
 
 const FIELDS = 10; // x, y, r, red, green, blue, precise, start year, end year, start on timeline scale
 
-/** Dot size multiplier: 0.6x at world view, growing to 1.2x by about 30x zoom. */
+/** Dot size multiplier: 0.6x at world view on a desktop screen, growing to 1.2x by about 30x zoom.
+ *  k is relative to the world filling a desktop screen, so it is below 1 on a phone and dots shrink. */
 function sizeAtZoom(k) {
-  return Math.min(1.2, 0.6 + 0.12 * Math.log2(k));
+  return Math.max(0.35, Math.min(1.2, 0.6 + 0.12 * Math.log2(k)));
 }
 
 function compile(gl, type, source) {
@@ -131,8 +132,9 @@ export function createDots(canvas) {
       count = dots.length;
     },
 
-    /** play: {now, flash} in timeline units while play mode runs, otherwise null. */
-    draw(transform, style, years = [-1e9, 1e9], play = null) {
+    /** play: {now, flash} in timeline units while play mode runs, otherwise null.
+     *  screenScale: how big the world is on screen compared with a desktop screen. */
+    draw(transform, style, years = [-1e9, 1e9], play = null, screenScale = 1) {
       const dpr = window.devicePixelRatio || 1;
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0, 0, 0, 0);
@@ -142,7 +144,7 @@ export function createDots(canvas) {
       gl.uniform3f(u.u_t, transform.k, transform.x, transform.y);
       gl.uniform2f(u.u_size, canvas.width / dpr, canvas.height / dpr);
       gl.uniform1f(u.u_dpr, dpr);
-      gl.uniform1f(u.u_zoomSize, sizeAtZoom(transform.k));
+      gl.uniform1f(u.u_zoomSize, sizeAtZoom(transform.k * screenScale));
       gl.uniform1f(u.u_alpha, style.alpha);
       gl.uniform4f(u.u_outline, ...style.outline);
       gl.uniform2f(u.u_range, years[0], years[1]);

@@ -12,6 +12,9 @@ const summaries = new Map();  // wiki title -> Promise<{extract, image}>
 let current = null;           // the event the card shows
 let timer = 0;
 let anchor = [0, 0];
+let sheet = false;            // touch: the card sits along the bottom of the screen, with a link
+
+export const wikiUrl = (e) => `https://en.wikipedia.org/wiki/${encodeURIComponent(e.wiki.replaceAll(' ', '_'))}`;
 
 function summary(title) {
   if (!summaries.has(title)) {
@@ -34,6 +37,7 @@ function shorten(text) {
 }
 
 function place() {
+  if (sheet) { card.style.left = card.style.top = ''; return; } // positioned by CSS
   const pad = 14;
   const [x, y] = anchor;
   card.style.left = `${Math.min(x + pad, window.innerWidth - card.offsetWidth - pad)}px`;
@@ -60,14 +64,25 @@ function render(e, details) {
   text.className = 'text';
   text.textContent = details?.extract ? shorten(details.extract) : e.desc;
   card.append(name, meta, text);
+  if (sheet) {
+    const link = document.createElement('a');
+    link.href = wikiUrl(e);
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Read on Wikipedia →';
+    card.append(link);
+  }
+  card.classList.toggle('sheet', sheet);
   card.hidden = false;
   place();
 }
 
-export function showCard(event, clientX, clientY) {
+/** asSheet: show it as a tappable panel along the bottom (for touch) instead of following the pointer. */
+export function showCard(event, clientX, clientY, asSheet = false) {
   anchor = [clientX, clientY];
   if (!event) { hideCard(); return; }
-  if (event === current) { place(); return; }
+  if (event === current && asSheet === sheet) { place(); return; }
+  sheet = asSheet;
   current = event;
   render(event, null);
   clearTimeout(timer);

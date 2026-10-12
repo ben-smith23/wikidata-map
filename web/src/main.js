@@ -4,7 +4,7 @@ import { select } from 'd3-selection';
 import { zoom, zoomIdentity } from 'd3-zoom';
 import { drawBasemap, loadBasemap, projectBasemap } from './basemap.js';
 import { createDots } from './dots.js';
-import { hideCard, showCard } from './card.js';
+import { hideCard, showCard, wikiUrl } from './card.js';
 import { drawLabels, loadLabels, projectLabels } from './labels.js';
 import { CATEGORIES, OTHER, THEMES, category } from './theme.js';
 import { createTimeline, yearToT } from './timeline.js';
@@ -17,6 +17,15 @@ const SHOW_LABELS = true;
 const GESTURE_REFRESH_MS = 400;
 const ARRIVAL_SECONDS = 1.2; // play mode: how long an event's arrival animation lasts
 const MAX_ZOOM = 400; // about street-district scale; the coastline data gets coarse beyond ~50x
+const REACH = { mouse: 8, touch: 20 };
+const TAP_SLOP = 10; // px a finger can move and still count as a tap
+const TAP_MS = 400;
+const DESKTOP_WIDTH = 1400; // px: the world's on-screen width that dot sizes and label zooms are tuned for
+const EQUAL_EARTH_ASPECT = 2.05; // width / height of the whole map
+// Portrait screens start zoomed in so the map fills the height between the panels (instead of a thin
+// strip of world), centred on Europe and Africa.
+const PORTRAIT_CENTER = [20, 0];
+const PANEL_SPACE = 220; // px of screen height taken by the header, legend and timeline on a phone // how far from a dot (CSS pixels) a pointer or finger still picks it
 
 const stage = document.getElementById('stage');
 const baseCanvas = document.getElementById('base');
@@ -36,6 +45,7 @@ let gesturing = false;
 let frame = 0;
 let years = [-1e9, 1e9]; // visible year range, set by the timeline
 let timeline = null;
+let screenScale = 1; // the world's on-screen width at zoom 1 relative to DESKTOP_WIDTH (at most 1)
 
 /** "-0490-01-01" -> -490 */
 function yearOf(iso) {
@@ -59,6 +69,7 @@ function resize() {
     c.height = Math.round(window.innerHeight * dpr);
   }
   projection.fitExtent([[20, 20], [window.innerWidth - 20, window.innerHeight - 20]], { type: 'Sphere' });
+  screenScale = Math.min(1, Math.min(window.innerWidth, window.innerHeight * EQUAL_EARTH_ASPECT) / DESKTOP_WIDTH);
   projectBasemap(projection);
   projectLabels(projection);
   projectEvents();
@@ -103,7 +114,7 @@ function drawStatic() {
   drawBasemap(base, k, t, mark);
   labelCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   labelCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  if (SHOW_LABELS) drawLabels(labelCtx, transform, t, window.innerWidth, window.innerHeight);
+  if (SHOW_LABELS) drawLabels(labelCtx, transform, t, window.innerWidth, window.innerHeight, screenScale);
   mark('labels');
   baseCanvas.style.transform = labelCanvas.style.transform = '';
   rendered = transform;
@@ -121,7 +132,7 @@ function render() {
   if (!gesturing || performance.now() - renderedAt > GESTURE_REFRESH_MS) drawStatic();
   else moveStatic();
   const play = timeline?.playing ? { now: timeline.playhead, flash: timeline.tPerSecond * ARRIVAL_SECONDS } : null;
-  dots.draw(transform, THEMES[theme].dots, years, play);
+  dots.draw(transform, THEMES[theme].dots, years, play, screenScale);
   if (play) requestDraw(); // keep animating arrivals while playing
 }
 
@@ -130,9 +141,9 @@ function requestDraw() {
 }
 
 /** The nearest dot within reach of the pointer that is inside the timeline's year range. */
-function pointAt(clientX, clientY) {
+function pointAt(clientX, clientY, reachPx = REACH.mouse) {
   const [x, y] = transform.invert([clientX, clientY]);
-  const reach = 8 / transform.k;
+  const reach = reachPx / transform.k;
   let best = null, bestDist = reach * reach;
   index.visit((node, x0, y0, x1, y1) => {
     if (!node.length) {
@@ -203,12 +214,34 @@ async function main() {
   };
   const [k, lon, lat] = location.hash.slice(1).split('/').map(Number);
   if (k && Number.isFinite(lon) && Number.isFinite(lat)) setView(k, [lon, lat]);
+  else if (window.innerHeight > window.innerWidth) {
+    const mapHeight = (window.innerWidth - 40) / EQUAL_EARTH_ASPECT;
+    setView(Math.max(1, (window.innerHeight - PANEL_SPACE) / mapHeight), PORTRAIT_CENTER);
+  }
 
-  stage.addEventListener('mousemove', (ev) => showCard(pointAt(ev.clientX, ev.clientY)?.event, ev.clientX, ev.clientY));
-  stage.addEventListener('mouseleave', hideCard);
+  // Mouse: hover shows the card, click opens Wikipedia. Touch has no hover, so a tap shows the card
+  // (with a link to Wikipedia) and a tap on empty map closes it. Taps are detected from pointer events
+  // because the zoom behaviour's touch handling stops the browser from turning them into clicks.
+  let tap = null; // the touch that may become a tap
+  stage.addEventListener('pointerdown', (ev) => {
+    tap = ev.pointerType !== 'mouse' && ev.isPrimary ? { x: ev.clientX, y: ev.clientY, time: ev.timeStamp } : null;
+  });
+  stage.addEventListener('pointerup', (ev) => {
+    if (!tap || !ev.isPrimary) return;
+    const moved = Math.hypot(ev.clientX - tap.x, ev.clientY - tap.y);
+    if (moved < TAP_SLOP && ev.timeStamp - tap.time < TAP_MS) {
+      const p = pointAt(ev.clientX, ev.clientY, REACH.touch);
+      if (p) showCard(p.event, ev.clientX, ev.clientY, true); else hideCard();
+    }
+    tap = null;
+  });
+  stage.addEventListener('pointermove', (ev) => {
+    if (ev.pointerType === 'mouse') showCard(pointAt(ev.clientX, ev.clientY)?.event, ev.clientX, ev.clientY);
+  });
+  stage.addEventListener('pointerleave', (ev) => { if (ev.pointerType === 'mouse') hideCard(); });
   stage.addEventListener('click', (ev) => {
     const p = pointAt(ev.clientX, ev.clientY);
-    if (p) window.open(`https://en.wikipedia.org/wiki/${encodeURIComponent(p.event.wiki.replaceAll(' ', '_'))}`, '_blank', 'noopener');
+    if (p) window.open(wikiUrl(p.event), '_blank', 'noopener');
   });
 
   const themeButton = document.getElementById('theme');
